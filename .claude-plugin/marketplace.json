@@ -1,0 +1,12 @@
+{
+  "name": "nara-stack",
+  "owner": { "name": "Nara Shin", "email": "joyshin93@gmail.com" },
+  "plugins": [
+    {
+      "name": "nara-stack-harness",
+      "source": "./",
+      "description": "1인 풀스택 외주 하네스 — 이슈 플로우 스킬·리뷰 서브에이전트·안전/자동화 훅. React + Vite + Supabase.",
+      "version": "0.1.0"
+    }
+  ]
+}
