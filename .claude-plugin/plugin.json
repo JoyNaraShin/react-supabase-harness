@@ -1,0 +1,9 @@
+{
+  "name": "react-supabase-harness",
+  "version": "0.1.0",
+  "description": "1인 풀스택 개발을 위한 Claude Code 하네스 — 이슈 플로우 스킬, 리뷰 서브에이전트, 안전·자동화 훅. React + Vite + Supabase 스택 기준.",
+  "author": { "name": "Nara Shin", "email": "53807835+JoyNaraShin@users.noreply.github.com" },
+  "homepage": "https://github.com/JoyNaraShin/react-supabase-harness",
+  "license": "MIT",
+  "keywords": ["harness", "workflow", "issue-flow", "react", "vite", "supabase"]
+}
