@@ -59,7 +59,10 @@ def main() -> None:
             f"⚠️  `src/` 편집 {state['count']}회 누적. "
             "변경 검증 주기 — `/check` (typecheck + biome) 또는 `/verify` (full) 실행 권장."
         )
-        print(json.dumps({"additionalContext": msg}))
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": msg,
+        }}))
         state["count"] = 0  # recommendation 후 리셋
 
     save_state(p, state)
