@@ -2,7 +2,7 @@
 name: feature-scaffold
 description: 새 feature 모듈 스캐폴드 — src/features/<name>/{api,components,hooks,types.ts,index.ts} + src/pages/<name>/ 진입 페이지. 라우트는 src/routes/routes.tsx 등록 안내. 새 도메인 모듈 추가 시 사용.
 disable-model-invocation: true
-allowed-tools: Bash(mkdir *)
+allowed-tools: Bash(mkdir *), Write, Glob
 argument-hint: "<module-name> (kebab-case, 예: posts 또는 admin-metrics)"
 ---
 
