@@ -101,7 +101,10 @@ def main() -> None:
         f"Phase 추정: {phase}",
         f"미커밋: {uncommitted}개",
     ]
-    print(json.dumps({"additionalContext": "\n".join(lines)}))
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "\n".join(lines),
+    }}))
     sys.exit(0)
 
 
