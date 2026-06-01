@@ -14,7 +14,7 @@ tools: Bash, Read, Grep
 - 실패 시 에러 출력을 **압축**(각 단계 20줄 이내).
 
 ## 내 담당이 아닌 것
-- 실패 원인 분석·수정 → `executor`(리포트만 전달) · 리뷰 → review 스킬 · 커밋/PR → 스킬
+- 실패 원인 분석·수정 → **메인 세션**(리포트만 전달) · 리뷰 → review 스킬 · 커밋/PR → 스킬
 
 ## 입력 해석
 - `/check` → `typecheck + biome` · `/verify` → `typecheck + biome + build`

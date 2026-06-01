@@ -5,7 +5,9 @@ disable-model-invocation: true
 argument-hint: [경로 | 비우면 현재 브랜치 diff 기준]
 ---
 
-`architect-reviewer` 서브에이전트로 설계 리뷰.
+`architect-reviewer`(opus, 적대적) 서브에이전트로 설계 리뷰.
+
+> **in-loop 자문** — 자기-스폰이라 머지 보증이 아니다. 머지 최종 게이트는 외부 네이티브 `/code-review`(RULES §11).
 
 ## 1. 대상 확정
 - `$ARGUMENTS` 있으면 그 경로 / 없으면 `git diff main...HEAD --name-only` / 전부 비면 되묻고 종료

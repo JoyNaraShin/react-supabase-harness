@@ -7,11 +7,14 @@
 /phase   →  plan 작성 (Phase → Epic → Story)         [planner + architect 자동검증]
 /issue   →  Epic Issue + 모든 Story Issue 일괄 생성   [type/area/phase 라벨, sub-issue]
 /branch  →  Story 브랜치 분기  <type>/<issue#>-<slug>
-(executor) 슬라이스 구현 → /check 상시
+(메인 세션) 슬라이스 구현 → /check 상시
 /commit  →  승인 게이트 커밋 (Conventional Commits)
 /verify  →  PR 직전 full 검증 (typecheck + biome + build)
 /pr      →  PR open (Closes #<Story> 자동) → 리뷰 → squash merge
 ```
+- 구현은 **메인 세션(opus)** 이 직접(약한 서브에이전트 위임 X). 구현 보조 스킬:
+  - 새 도메인 모듈 → `/feature-scaffold <name>` (표준 `features/` + `pages/` 구조)
+  - DB 스키마 변경 → `/db-migration <slug>` (RLS enable + rollback 주석, `INFRA.md`)
 
 ## 브랜치 전략
 - `<type>/<issue#>-<slug>` (feat/fix/chore/docs/refactor). main/develop 직접 push 금지.
@@ -23,7 +26,9 @@
 - `phase:` phase 번호
 
 ## 품질 게이트
-- 코드: 슬라이스마다 `/check`, PR 전 `/verify`, 그리고 `/review-architect`(+ 필요 시 `/review-security`) Critical 0 + Major 0.
+- **in-loop(자기-스폰 · 자문)**: 슬라이스마다 `/check`, PR 전 `/verify`, `/review-architect`(+필요 시 `/review-security`). 적대적으로 돌지만 **자기-스폰이라 통과를 *보증하지 않는다*** — Critical/Major 0은 머지 *허가*가 아니라 머지 *후보* 조건.
+- **최종 머지 게이트(외부 · 무편향)**: PR/머지 직전 **네이티브 `/code-review`**(중요 변경은 `/code-review ultra`). 작성·자문과 독립된 외부 리뷰가 각 발견을 독립검증 → 이게 실제 머지 허가. 내부 리뷰가 OK여도 외부 리뷰 Critical 미해결이면 머지 금지.
+- 리뷰 독립성 원칙: **리뷰어 역량 ≥ 작성자 · 작성자와 다른 인스턴스 · 적대적**(RULES §11).
 - 안전: `block-destructive-git` 훅이 파괴적 git 차단. `/commit`만 합법 우회.
 
 ## 일일 리듬

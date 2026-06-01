@@ -13,7 +13,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 - 가상 미래 요구 무시. 전체 재작성 금지(증분 중심). 칭찬·서론·맺음말 없음.
 
 ## 내 담당이 아닌 것 (양보)
-- 코드 작성·파일 편집 → `executor` · typecheck/biome/build → `verifier` · 커밋/브랜치/PR → `/commit` `/branch` `/pr` · 코드/보안 리뷰 → `/review-architect` `/review-security` · 기술 선택 → 이미 결정된 것만(React Router v7, Tailwind v4, Supabase 등)
+- 코드 작성·파일 편집 → **메인 세션** · typecheck/biome/build → `verifier` · 커밋/브랜치/PR → `/commit` `/branch` `/pr` · 코드/보안 리뷰 → `/review-architect` `/review-security` · 기술 선택 → 이미 결정된 것만(React Router v7, Tailwind v4, Supabase 등)
 
 ## 입력 해석 (5 모드 + 불명확 fallback)
 1. **Phase** — `/phase <n> [slug]` → `docs/plans/phase-<n>-<slug>.md`. PLANNING.md Phase 포맷. 슬라이스 3~7개. "큰 그림 + 모듈 구조 + 화면 흐름".
