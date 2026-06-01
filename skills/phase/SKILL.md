@@ -18,8 +18,13 @@ argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-
 - not found 시 `general-purpose` 재호출(앞머리에 planner.md 를 시스템 프롬프트로 읽으라 지시).
 - plan 파일 Write 는 planner 가 수행. 메인 세션은 요약 1줄: `✓ <path> (<N> slices|stories) [created|updated]`.
 
-## 3. Architect 자동 검증
-planner Write 직후 메인 세션이 `architect-reviewer` 를 **자동 호출**(plan 단계 finding 은 1줄 수정으로 끝나는 가장 싼 시점). 대상=방금 작성된 plan 파일, 5축(Structure/Dependencies/Boundaries/Composition/Evolution). 리포트 그대로 노출. Critical/Major 있으면 사용자 결정 → plan patch. Critical 0 + Major 0 또는 사용자 OK 시 다음 단계 진입.
+## 3. 자동 검증 (적대적 · 2종, plan 단계가 가장 싼 시점)
+planner(=opus) Write 직후 메인 세션이 **작성자와 다른 인스턴스**로 둘 다 자동 호출:
+- **`plan-consistency-reviewer`(sonnet, 싼 기계 패스)** — PLANNING.md 4블록 준수·acceptance 테스트가능성·자가모순·미정의 참조·의존 그래프 sanity.
+- **`architect-reviewer`(opus, 적대적 판단)** — 5축(Structure/Dependencies/Boundaries/Composition/Evolution).
+
+두 리포트 **그대로** 노출. Critical/Major 있으면 사용자 결정 → plan patch. 둘 다 Critical 0 + Major 0 또는 사용자 OK 시 진입.
+> 리뷰어 ≥ 작성자 · 다른 인스턴스 · 적대적(RULES §11). 이 자동검증은 **in-loop 자문**이며, 코드 머지의 최종 게이트는 외부 네이티브 `/code-review`(WORKFLOW).
 
 ## 4. 금지
 - 코드 편집 / git 커밋·브랜치 — 이 스킬은 plan 문서 전용

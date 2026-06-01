@@ -30,7 +30,7 @@ argument-hint: "<module-name> (kebab-case, 예: posts 또는 admin-metrics)"
    - `queries.ts`: `useXList`/`useXDetail`(useQuery) + mutation 훅(invalidate)
    - `types.ts`: `database.types.ts` 의 Row 타입 재노출 또는 도메인 타입
    - `index.ts`: 공개 API barrel
-5. **페이지/라우트 안내**: 페이지 컴포넌트는 사용자/executor 가 작성. `src/routes/routes.tsx` 에 lazy 라우트 + `src/routes/paths.ts` 에 경로 상수 추가하도록 안내.
+5. **페이지/라우트 안내**: 페이지 컴포넌트는 메인 세션이 작성. `src/routes/routes.tsx` 에 lazy 라우트 + `src/routes/paths.ts` 에 경로 상수 추가하도록 안내.
 6. **자가 체크**: Naming(PascalCase 컴포넌트·`use*` 훅·`types.ts`) · import 계층(external → @/lib → @/components/ui → @/features/{self} → @/features/{other} barrel) 준수 메시지.
 
 ## 참고
