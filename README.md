@@ -4,14 +4,16 @@
 
 > 설계 근거: 마스터 플랜 `8-bright-stardust.md` Part 1 §1.2 / Part 4 (Opus 4.8 기준 고도화 — 명시 모델 ID · commands→skills · 플러그인 패키징).
 
-## 구성
+## 구성 (v0.2.0)
 
 | 컴포넌트 | 상태 |
 |---|---|
 | `hooks/` — 안전·자동화 훅 4종 | ✅ |
-| `skills/` — issue / branch / commit / pr / phase / check / verify / review-* / db-migration / feature-scaffold | 🔜 |
-| `agents/` — architect-reviewer / executor / security-reviewer (+ planner / verifier) | 🔜 |
-| `docs/` — RULES / PLANNING / WORKFLOW (이슈 플로우 규칙) | 🔜 |
+| `skills/` — new-project / issue / branch / commit / pr / phase / check / verify / review-* / db-migration / feature-scaffold (12) | ✅ |
+| `agents/` — architect-reviewer / executor / security-reviewer (+ planner / verifier) | ✅ |
+| `docs/` — RULES / PLANNING / WORKFLOW / INFRA / BOOTSTRAP | ✅ |
+
+신규 프로젝트는 보일러플레이트 `react-supabase-stack`(별도 레포)에서 스캐폴드 → `/new-project`로 부트스트랩. 전체 day-1 절차는 [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md).
 
 ## 훅 (현재)
 
