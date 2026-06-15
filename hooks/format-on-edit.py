@@ -3,13 +3,38 @@
 
 포맷 드리프트로 CI 가 깨지는 것을 hook 단계에서 차단(편집 직후 단일 파일 포맷).
 대상: src/**/*.{ts,tsx,js,jsx,json,css} + 루트 biome/tsconfig.
-실패해도 워크플로 차단 안 함 (exit 0). 프로젝트에 biome 이 없으면 silent skip.
+실패해도 워크플로 차단 안 함 (exit 0).
+
+biome 은 **프로젝트-로컬(node_modules/.bin/biome)** 에 설치된 경우에만 실행한다.
+설치돼 있지 않으면 silent skip — `npx` 로 네트워크 설치를 트리거하거나
+biome 을 쓰지 않는 프로젝트의 파일을 멋대로 재포맷하지 않는다.
 """
+from __future__ import annotations
+
 import json
+import os
 import subprocess
 import sys
 
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".json", ".css")
+
+
+def find_local_biome(start: str) -> str | None:
+    """편집 파일에서 위로 올라가며 프로젝트-로컬 biome 바이너리를 찾는다.
+
+    로컬에 설치된 경우에만 경로를 돌려준다(없으면 None → 호출부에서 skip).
+    이렇게 해서 네트워크 설치(npx @biomejs/biome)를 절대 트리거하지 않는다.
+    """
+    d = os.path.dirname(os.path.abspath(start))
+    while True:
+        for name in ("biome", "biome.cmd", "biome.exe"):
+            cand = os.path.join(d, "node_modules", ".bin", name)
+            if os.path.isfile(cand):
+                return cand
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
 
 
 def main() -> None:
@@ -32,10 +57,14 @@ def main() -> None:
     ):
         sys.exit(0)
 
+    biome = find_local_biome(path)
+    if not biome:
+        sys.exit(0)  # 로컬 biome 없음 → 네트워크 설치 대신 skip
+
     try:
         # biome check --write — 포맷 + safe lint fix. 단일 파일이라 빠름.
         subprocess.run(
-            ["npx", "@biomejs/biome", "check", "--write", path],
+            [biome, "check", "--write", path],
             timeout=10,
             check=False,
             capture_output=True,
