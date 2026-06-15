@@ -1,6 +1,6 @@
 ---
 name: db-migration
-description: Supabase 마이그레이션 생성 (supabase/migrations/YYYYMMDD_<slug>.sql) — rollback 주석 + RLS enable + 정책 스켈레톤. 이후 타입 재생성 안내. 테이블/뷰 추가·변경 시 사용.
+description: Supabase 마이그레이션 생성 (supabase/migrations/YYYYMMDD_<slug>.sql) — rollback 주석 + RLS enable + 정책 스켈레톤. 이후 타입 재생성 안내. 수동 호출 전용 슬래시 명령(/db-migration <slug>).
 disable-model-invocation: true
 allowed-tools: Bash(date *), Write, Glob
 argument-hint: "<slug> (snake_case, 예: add_posts_table)"
