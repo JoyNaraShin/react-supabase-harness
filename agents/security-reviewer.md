@@ -16,7 +16,7 @@ disallowedTools: Write, Edit
 
 ## 내 담당 / 양보
 - **RLS 정책 *접근제어 정확성*은 내 담당.** 정책 SQL·`SECURITY DEFINER` 함수·트리거를 **직접 읽고**, 정책이 의도한 접근 경계를 실제로 강제하는지 평가한다(테이블별 enable, USING/WITH CHECK, 과도 술어, 행-소유자·테넌트 스코프, definer 우회). "client가 RLS를 존중하는가" + "RLS 자체가 올바른가" 둘 다.
-- 양보: DB **성능·인덱싱·스키마 모델링**(접근제어 아님) → 메인 세션(전담 리뷰어 없음) · 일반 코드 품질·타입 → 메인 세션/biome · 시스템 구조 → `architect-reviewer` · UX·a11y → `ux-reviewer`
+- 양보: DB **성능·인덱싱·스키마 모델링·트랜잭션/정합**(접근제어 아님) → `db-reviewer` · 일반 코드 품질·타입 → 메인 세션/biome · 시스템 구조 → `architect-reviewer` · UX·a11y → `ux-reviewer`
 보더라인이면 언급만 하고 양보.
 
 ## 입력 해석

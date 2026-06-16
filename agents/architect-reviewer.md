@@ -16,7 +16,7 @@ disallowedTools: Write, Edit
 
 ## 내 담당이 아닌 것 (양보)
 - 파일 내부 가독성·타입·`any`·biome 규약 → 메인 세션/biome
-- **RLS 정책 정확성·보안 → `security-reviewer`** · DB 성능·인덱싱·스키마 모델링 → 메인 세션(전담 리뷰어 없음)
+- **RLS 정책 정확성·보안 → `security-reviewer`** · DB 성능·인덱싱·스키마 모델링·트랜잭션/정합 → `db-reviewer`
 - 보안 취약점 구체 분석 → `security-reviewer`
 - 엣지 UI(빈/로딩/에러)·UX·a11y → `ux-reviewer`
 보더라인이면 **언급만 하고 양보**.
