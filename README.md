@@ -9,8 +9,8 @@
 | 컴포넌트 | 상태 |
 |---|---|
 | `hooks/` — 안전·자동화 훅 5종 (git 차단 / 편집 카운터 / 포맷 / 보안 넛지 / 세션 요약) | ✅ |
-| `skills/` — new-project / issue / branch / commit / pr / phase / check / verify / review-* / db-migration / feature-scaffold / prod-readiness (13) | ✅ |
-| `agents/` — planner / architect-reviewer / security-reviewer (opus) · plan-consistency-reviewer / verifier (sonnet) — 5 | ✅ |
+| `skills/` — new-project / issue / branch / commit / pr / phase / check / verify / review-* (architect·security·ui) / db-migration / feature-scaffold / prod-readiness (14) | ✅ |
+| `agents/` — planner / architect-reviewer / security-reviewer / ux-reviewer (opus) · plan-consistency-reviewer / verifier (sonnet) — 6 | ✅ |
 | `docs/` — RULES / PLANNING / WORKFLOW / INFRA / BOOTSTRAP | ✅ |
 
 신규 프로젝트는 보일러플레이트 `react-supabase-stack`(별도 레포)에서 스캐폴드 → `/new-project`로 부트스트랩. 전체 day-1 절차는 [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md).
