@@ -6,7 +6,7 @@
       "name": "nara-stack-harness",
       "source": "./",
       "description": "1인 풀스택 외주 하네스 — 프로젝트 부트스트랩·이슈 플로우 스킬·리뷰 서브에이전트·안전/자동화 훅. React + Vite + Supabase.",
-      "version": "0.2.2"
+      "version": "0.3.0"
     }
   ]
 }
