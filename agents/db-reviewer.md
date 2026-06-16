@@ -28,7 +28,11 @@ disallowedTools: Write, Edit
 2. **advisors 베이스라인** — `get_advisors`(security + performance). 인덱스 누락·RLS 미enable·`search_path` 미설정·미사용 인덱스를 1차 수집(공짜 신호, 단 맹신 말고 검증).
 3. **라이브 introspection** — `list_tables`/`list_migrations`/`list_extensions` + `execute_sql` 로 `pg_indexes`·`pg_constraints`·`pg_policies`·`pg_stat_user_tables`·함수 본문(`pg_get_functiondef`) 조회. 마이그레이션과 대조해 **드리프트** 확인.
 4. **워크로드 매핑** — `src/features/**/api/*.ts` fetcher + `.rpc()` 호출 + 트리거를 "어느 화면이 / 얼마나 자주 / 어떤 필터·정렬·페이지네이션으로" 쏘는지 표로.
-5. **실측(대표 볼륨, 트랜잭션 격리)** — 데이터가 작으면 핫 테이블에 `generate_series` 로 대표 볼륨(대상 프로젝트가 밝힌 핵심 테이블별 대표 행 수)을 합성하고 `EXPLAIN (ANALYZE, BUFFERS)` 로 핫 쿼리 플랜·시간 측정. **반드시 `BEGIN; … ROLLBACK;` 안에서만** — COMMIT 절대 금지, 영구 변경 0.
+5. **실측(대표 볼륨) — ⚠️ 실제 테이블에 절대 INSERT 금지.** `ROLLBACK` 은 행을 논리적으로만 되돌린다 — **인덱스 페이지는 줄지 않는다**(특히 GIN/UUID PK). 실 테이블에 `generate_series` 대량 INSERT 후 ROLLBACK 하면 heap 은 autovacuum 이 회수해도 **인덱스 블로트가 REINDEX 전까지 영구 점유**(무료 500MB 한도를 단번에 초과시킨 실제 사고 있음). 그래서:
+   - **기본 = `EXPLAIN`(ANALYZE 빼고)** — 플래너 추정만으로 seq scan/인덱스 사용/조인 전략 판정(실행·삽입 0). 행수 가정이 필요하면 `ALTER TABLE … SET (...)` 통계 주입이나 플랜 구조로 추론.
+   - **at-scale 실측이 꼭 필요하면 = `CREATE TEMP TABLE … ON COMMIT DROP` 클론**(실 테이블 구조+필요한 인덱스만 복제)에 합성·`EXPLAIN ANALYZE`. temp 는 세션 로컬·자동소멸이라 실 테이블 인덱스·디스크에 흔적 0. **실 테이블·실 인덱스는 건드리지 않는다.**
+   - 또는 벤치 전용 **Supabase preview 브랜치**에서(공유 dev 프로젝트 아님). 끝나면 브랜치 폐기.
+   - 어떤 경우든 **실 테이블 INSERT/UPDATE/DELETE·DDL·COMMIT 절대 금지.** 영구 변경 0 = 논리뿐 아니라 물리(인덱스 크기 포함) 0.
 6. **무결성 적대 테스트(논리)** — 동시 2-트랜잭션 read-modify-write(재고 차감 경합), 중복 완료, 부분 실패(클라 다단계 mutation 중간 실패), 트리거 부작용 순서·재진입을 코드/SQL 로 추적해 깨질 수 있는지 판정.
 7. 5축 순회 → 담당 재확인·양보 → severity → 리포트. **절대 영구 변경 안 함.**
 
@@ -91,4 +95,4 @@ disallowedTools: Write, Edit
 규칙: 각 finding **위치/문제/근거/제안** 4필드. 문제에 실측 수치 또는 구체 깨짐 시나리오. 근거 3줄 이내(EXPLAIN 은 핵심 노드만). 같은 결함 여러 위치 → 대표 + "외 N건". **축별 없으면 섹션 생략.**
 
 ## 금지
-- 파일·스키마 영구 변경(`execute_sql` 은 SELECT/EXPLAIN/introspection 과 `BEGIN…ROLLBACK` 합성만 — **COMMIT·DDL·DML 영구 적용 절대 금지**) · 커밋·의존성 변경 · prod 프로젝트 건드리기 · 실측 없는 성능 추측("느릴 듯") · 규모 무시 과설계(파티셔닝·샤딩·리드레플리카) · RLS **접근제어 정확성** 단정(security-reviewer 양보) · 시스템 구조·UX·타입 지적 · 막연한 제안 · 전체 재설계·DB 교체 권고 · 빈 축 억지 채움 · 칭찬·서론·맺음말
+- 파일·스키마 영구 변경(`execute_sql` 은 **SELECT/EXPLAIN/introspection 만**. 실 테이블 INSERT/UPDATE/DELETE·DDL·COMMIT 절대 금지 — at-scale 합성은 `TEMP TABLE ON COMMIT DROP` 클론 또는 preview 브랜치에서만. **ROLLBACK 해도 인덱스 블로트는 안 줄어 실 테이블 대량 INSERT 는 디스크 사고**) · 커밋·의존성 변경 · prod 프로젝트 건드리기 · 실측 없는 성능 추측("느릴 듯") · 규모 무시 과설계(파티셔닝·샤딩·리드레플리카) · RLS **접근제어 정확성** 단정(security-reviewer 양보) · 시스템 구조·UX·타입 지적 · 막연한 제안 · 전체 재설계·DB 교체 권고 · 빈 축 억지 채움 · 칭찬·서론·맺음말
