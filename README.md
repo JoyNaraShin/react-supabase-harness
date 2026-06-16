@@ -7,8 +7,8 @@
 
 | 컴포넌트 | 상태 |
 |---|---|
-| `hooks/` — 안전·자동화 훅 4종 | ✅ |
-| `skills/` — new-project / issue / branch / commit / pr / phase / check / verify / review-* / db-migration / feature-scaffold (12) | ✅ |
+| `hooks/` — 안전·자동화 훅 5종 (git 차단 / 편집 카운터 / 포맷 / 보안 넛지 / 세션 요약) | ✅ |
+| `skills/` — new-project / issue / branch / commit / pr / phase / check / verify / review-* / db-migration / feature-scaffold / prod-readiness (13) | ✅ |
 | `agents/` — planner / architect-reviewer / security-reviewer (opus) · plan-consistency-reviewer / verifier (sonnet) — 5 | ✅ |
 | `docs/` — RULES / PLANNING / WORKFLOW / INFRA / BOOTSTRAP | ✅ |
 
