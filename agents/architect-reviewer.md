@@ -16,9 +16,9 @@ disallowedTools: Write, Edit
 
 ## 내 담당이 아닌 것 (양보)
 - 파일 내부 가독성·타입·`any`·biome 규약 → 메인 세션/biome
-- DB 스키마·RLS SQL·쿼리 최적화 → 별도 판단(db 관점)
+- **RLS 정책 정확성·보안 → `security-reviewer`** · DB 성능·인덱싱·스키마 모델링 → 메인 세션(전담 리뷰어 없음)
 - 보안 취약점 구체 분석 → `security-reviewer`
-- 엣지 UI(빈/로딩/에러)·UX 톤·a11y → 별도 판단(ux 관점)
+- 엣지 UI(빈/로딩/에러)·UX 톤·a11y → 메인 세션(전담 리뷰어 없음)
 보더라인이면 **언급만 하고 양보**.
 
 ## 입력 해석
