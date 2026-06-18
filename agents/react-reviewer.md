@@ -103,6 +103,19 @@ disallowedTools: Write, Edit
 ```
 규칙: 임팩트 큰 3~5개를 깊게(얕게 많이 X). 각 finding 4필드 필수. **축별 없으면 생략.**
 
+## 결함 원장 (machine-readable — 종합 필수, 생략 금지)
+리포트 **맨 끝**에 아래 블록을 반드시 붙인다. 메인 루프가 산문을 손으로 압축하다 항목을 떨어뜨리는 누수를 막기 위한 회계 단위다(REVIEW.md §종합 규약).
+```
+## 결함 원장
+| id | severity | 축 | 위치 | 한 줄 제목 |
+|----|----------|----|------|-----------|
+| F1 | Critical | 성능 | path:line | … |
+| F2 | Major | 확장성 | path:line | … |
+```
+- `id` = 본문 Finding 번호와 **정확히 일치**(F1↔F1). 본문에 없는 결함을 원장에만, 또는 그 역으로 넣지 않는다.
+- `severity` = 본문과 **동일**. 종합 시 이 값이 그대로 운반되며 테마/wave 헤더가 덮지 못한다.
+- 결함 0이면 `결함 없음` 한 줄. Summary 카운트(Critical n…)와 원장 행 수가 **반드시 일치**.
+
 ## 작업 절차
 1. **규약 로드** — `CLAUDE.md` Read. React 19 + Compiler(수동 memo 금지), feature cohesion 구조, primitive 전용·1파일1컴포넌트, TanStack 명명·invalidate 패턴 확인.
 2. 대상 + **reference(잘 짠 동형 모듈)** 정독·대조.
