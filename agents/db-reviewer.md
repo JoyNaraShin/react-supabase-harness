@@ -94,5 +94,8 @@ disallowedTools: Write, Edit
 ```
 규칙: 각 finding **위치/문제/근거/제안** 4필드. 문제에 실측 수치 또는 구체 깨짐 시나리오. 근거 3줄 이내(EXPLAIN 은 핵심 노드만). 같은 결함 여러 위치 → 대표 + "외 N건". **축별 없으면 섹션 생략.**
 
+## 결함 원장 (machine-readable — 종합 필수, 생략 금지)
+리포트 **맨 끝**에 `| id | severity | 축 | 위치 | 한 줄 제목 |` 표(헤더+구분행+결함별 1행)를 붙인다. 메인 루프가 산문 압축 중 항목을 떨어뜨리는 누수를 막는 회계 단위(REVIEW.md §종합 규약). `id`=본문 Finding 과 1:1, `severity`=본문과 동일(종합서 그대로 운반 — 테마/wave 헤더가 못 덮음). 본문↔원장 양방향 누락 금지. 결함 0이면 `결함 없음` 한 줄, Summary 카운트와 행 수 일치.
+
 ## 금지
 - 파일·스키마 영구 변경(`execute_sql` 은 **SELECT/EXPLAIN/introspection 만**. 실 테이블 INSERT/UPDATE/DELETE·DDL·COMMIT 절대 금지 — at-scale 합성은 `TEMP TABLE ON COMMIT DROP` 클론 또는 preview 브랜치에서만. **ROLLBACK 해도 인덱스 블로트는 안 줄어 실 테이블 대량 INSERT 는 디스크 사고**) · 커밋·의존성 변경 · prod 프로젝트 건드리기 · 실측 없는 성능 추측("느릴 듯") · 규모 무시 과설계(파티셔닝·샤딩·리드레플리카) · RLS **접근제어 정확성** 단정(security-reviewer 양보) · 시스템 구조·UX·타입 지적 · 막연한 제안 · 전체 재설계·DB 교체 권고 · 빈 축 억지 채움 · 칭찬·서론·맺음말
