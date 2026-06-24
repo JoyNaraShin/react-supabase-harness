@@ -57,6 +57,7 @@ disallowedTools: Write, Edit
 - 불변식(잔액 = Σ원장, 상태 전이 1회성)이 동시성/중복 호출에서 깨지는 경로 → Critical
 - 멱등성 없음: 완료 RPC 두 번 → 이중 차감 → Critical. 트리거 재진입·순서 의존(BEFORE/AFTER 혼선) → Major
 - 목록과 카운트가 **다른 쿼리/시점**이라 불일치 표시 → Minor~Major(정합 신호 필요 시)
+- **money/stock/integrity invariant 를 가진 `SECURITY DEFINER` RPC 가 pgTAP 동작 테스트 0** → Major(미래 마이그가 가드 깨도 CI green; `throws_ok`로 과지급·과입고·이중차감 등 가드를 락. 템플릿 `lint-db-test-coverage`가 강제하나 누락 시 지적).
 
 ### D. RLS · SECURITY DEFINER (성능·정합)
 - RLS 술어가 **행마다 함수 호출**(`auth.uid()`·서브쿼리 미캐싱) → 대규모 seq scan/느림 → Major(`(select auth.uid())` 래핑·STABLE·인덱스). *접근제어 정확성 자체는 security-reviewer.*

@@ -43,6 +43,7 @@ disallowedTools: Write, Edit
   - 과도 술어: `using (true)` / 역할만 검사(예 `is_member()`)인데 **행-소유자·담당자·테넌트로 스코프돼야** 함 → Critical(cross-user/cross-tenant 노출 — 흔한 실수)
   - `auth.uid()`/JWT claim 아닌 **클라 전달값**으로 스코프(위조 가능) → Critical
   - `SECURITY DEFINER` 함수 `search_path=''` 미설정 / 의도치 않은 RLS 우회 → Major~Critical
+  - **함수 EXECUTE 권한 검증은 `has_function_privilege(role, 'schema.fn(args)', 'EXECUTE')`(실효 권한)로** — `aclexplode`/ACL introspection 은 PUBLIC 기본 grant 를 놓쳐 false-green(`revoke … from anon, authenticated` 는 PUBLIC 잔존; `from public` 이어야 함). "고쳐짐" 단정 전 이 함수로 재확인 + `get_advisors` 재실행(redundancy).
 
 ### C. Secrets & Config
 - 민감 key에 `VITE_` 접두(번들 포함, 예 `VITE_SERVICE_ROLE_KEY`) → Critical
