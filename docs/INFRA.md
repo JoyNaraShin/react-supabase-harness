@@ -28,6 +28,12 @@
 - `updated_at` 자동 트리거(`before update`).
 - RLS/조회 컬럼 인덱스.
 
+## DB 테스트 커버리지 (CI 강제 — 재발 차단)
+> BE는 사용자가 약한 영역 → 하네스가 백스톱. "문서 교훈"은 재발을 못 막는다(같은 `EXECUTE PUBLIC` 결함이 메모리에 적은 뒤에도 2회 출하된 실측). **교훈은 CI 단언으로.**
+- **새 SECURITY DEFINER RPC(money/stock/integrity invariant) + 새 RLS 테이블 → pgTAP 동작 테스트 필수.** 템플릿의 `scripts/lint-db-test-coverage.mjs`가 마이그를 스캔해 무테스트면 CI fail(read-only RPC·의도-무관 테이블은 명시 ALLOW_*). pgTAP는 "누군가 적은 단언"만 검사하므로 커버리지 자체를 게이트한다.
+- **함수 EXECUTE 권한 변경 검증은 `has_function_privilege('anon', 'schema.fn(args)', 'EXECUTE')`(실효 권한)로.** `aclexplode`/ACL introspection 은 **PUBLIC 기본 grant 를 놓쳐 false-green**(#266 실패모드 — `revoke … from anon, authenticated` 는 PUBLIC 잔존, `revoke … from public` 이어야). revoke 후 `get_advisors` 재실행을 redundancy 로.
+- **pgTAP 픽스처에서 doc_no(quote_no/order_no 등)는 명시값 전달** — `assign_*_no` 트리거는 null/'' 일 때만 채번 → `supabase db reset`(seed 로드) 환경에서 빈값 생성번호가 seed 와 충돌(`*_no_key`). dev 증분에선 안 터지고 CI 에서만 터짐.
+
 ## 인증 / 시크릿
 - Supabase Auth(이메일/비밀번호·OAuth). 가입 시 `profiles` 자동 생성 트리거. admin = `profiles.role = 'admin'`(수동 부트스트랩).
 - **client는 anon key 전용.** `SERVICE_ROLE_KEY`는 client 절대 금지. 민감 key에 `VITE_` 접두 금지.
