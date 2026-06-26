@@ -11,6 +11,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 - `docs/PLANNING.md` 슬라이스 포맷을 **반드시** 따른다. 플랜은 실행 가능해야 — "구현하세요" 같은 추상어 금지.
 - 각 슬라이스 = **단일 관심사 + 리뷰 가능한 크기**(diff ~500줄). 커밋 경계 명시(→ `/commit` 재사용).
 - 가상 미래 요구 무시. 전체 재작성 금지(증분 중심). 칭찬·서론·맺음말 없음.
+- **Phase 0(`/phase 0`)** 요청 시: 코드·스키마 전 **도메인·IA 산출물**(`PLANNING.md` Phase 0 3블록 = 도메인 스토리맵 · 핵심 워크플로우 3~5 · 화면 IA 무드 1줄)을 md 1장으로. 슬라이스·스키마 금지(Phase 1+). 중량 의식(이벤트스토밍·DDD) 금지 — 1장 상한. `domain-fitness-reviewer` 가 검증할 채점표가 되도록 엔티티마다 "만드는 화면·보는 화면·답하는 질문"을 명시.
 
 ## 내 담당이 아닌 것 (양보)
 - 코드 작성·파일 편집 → **메인 세션** · typecheck/biome/build → `verifier` · 커밋/브랜치/PR → `/commit` `/branch` `/pr` · 코드/보안 리뷰 → `/review-architect` `/review-security` · 기술 선택 → 이미 결정된 것만(React Router v7, Tailwind v4, Supabase 등)

@@ -3,10 +3,19 @@
 `planner` 에이전트와 `/phase` 스킬이 따르는 plan 포맷. 모든 plan은 `docs/plans/`.
 
 ## 계층
+- **Phase 0 (도메인·IA)** `phase-0-domain.md` — **코드·스키마 전** 적합성(fitness) 산출물. 아래 3블록을 md 1장으로. `domain-fitness-reviewer` 가 검증(FIT) 후 Phase 1 진입. 빈칸 = 템플릿 `docs/plans/*.template.md`.
 - **Phase** `phase-<n>-<slug>.md` — 큰 그림·모듈 구조·화면 흐름. 슬라이스 3~7개.
 - **Epic** `phase-<n>-epic-<seq>-<slug>.md` — 큰 흐름·결정·Story 분할. **~80줄 cap**. 세부는 Story 위임.
 - **Story** `phase-<n>-epic-<seq>-story-<story-seq>-<slug>.md` — **1 PR 단위** 세부 acceptance + 검증 + 롤백. Single-Story Epic도 분리.
 - **ad-hoc** `<slug>.md` — Phase plan 축소판.
+
+## Phase 0 산출물 (도메인·IA — md 1장, 3블록)
+**왜**: "스키마 first·디자인 first" 룰이 있어도 *국소(테이블/화면)* first 라 전체가 안 잡혀 재설계가 반복된다. Phase 0 은 *흐름·무드* first 를 코드 전에 강제한다.
+1. **도메인 스토리맵** — 가로축 = 업무 흐름(예 견적→수주→작업→재고→정산), 세로축 = 각 단계의 **엔티티 · 화면 · "답하는 질문"**. 모든 핵심 엔티티가 "만드는 화면 + 보는 화면"을 갖는지, 데이터가 가치까지 흐르는지 한눈에(고아 테이블·절단 사전 차단).
+2. **핵심 워크플로우 3~5개** — 사용자가 실제 일하는 순서(진입점 → 단계 → 결과 화면). "사용자의 하루"가 어디서 시작하나(대시보드 = 할 일 큐).
+3. **화면 IA** — 화면 목록 + **무드 1줄**(예 "B2B ERP = 쿨 뉴트럴, 절제·밀집"). 이게 `design-reviewer` 시작 모드의 *사전* 바가 되어 "화면 따로 놈"을 전면 정비 전에 차단.
+- **상한**: md 1장. 이벤트스토밍 풀세션·DDD 컨텍스트맵 = 영세 1인엔 과설계, 금지.
+- **게이트**: `domain-fitness-reviewer` 5축(종단·폐곡선·이중입력·가치·중복) FIT 판정 후 Phase 1.
 
 ## 슬라이스 포맷 (4블록 강제)
 ```markdown

@@ -8,6 +8,7 @@ argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-
 `planner` 에 3-tier(Phase → Epic → Story) plan 작성·갱신 위임. `docs/PLANNING.md`(plan 포맷)·`docs/RULES.md`(계획 규칙) 기준. Plan → Epic Issue → Story Issue 일괄 → feature 브랜치 진입점.
 
 ## 1. 모드 / 경로
+- **Phase 0 (도메인·IA)**: `/phase 0 [slug]` → `docs/plans/phase-0-domain.md`. 코드·스키마 전 적합성 산출물(스토리맵·워크플로우·화면IA — `PLANNING.md` Phase 0 3블록). 작성 후 **`/review-domain-fitness` FIT 판정 권고** → Phase 1 진입.
 - **Phase**: `/phase <n> [slug]` → `docs/plans/phase-<n>-<slug>.md`. slug 미지정 시 기존 `phase-<n>-*.md` 탐색(정확히 1개=갱신, 0개=에러, 2+=slug 요구).
 - **Epic**: `/phase <n> epic <seq> <slug>` → `docs/plans/phase-<n>-epic-<seq>-<slug>.md`. (~80줄 cap, 큰 흐름·Story 분할만). 상위 Phase plan 존재 전제.
 - **Story**: `/phase <n> epic <seq> story <story-seq> <slug>` → `...-story-<story-seq>-<slug>.md`. (1 PR 단위 세부 Acceptance + 수동 회귀). 상위 Epic plan 전제. **Single-Story Epic 도 분리 필수.**

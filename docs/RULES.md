@@ -19,6 +19,10 @@
 ## 4. (→ INFRA.md) Migration Safety
 DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 = 한 논리 변경 · RLS enable + policy 필수 · `-- rollback:` 주석 · destructive op 분리.
 
+## 5. 도메인 적합성 (고아 테이블 금지)
+- **테이블엔 화면이 따라온다.** 스키마에 엔티티/컬럼/FK/트리거를 추가하는 슬라이스는, 그것을 **읽는/쓰는 화면(또는 RPC 소비) 슬라이스를 같은 Epic 안에 명시**해야 한다. 시드·스키마만 있고 소비 코드 0인 **고아/절단 금지**(데이터가 가치까지 흐르지 못함 — 재설계의 단골 원인).
+- 코드 전 `/phase 0` 도메인·IA 게이트(`PLANNING.md`)에서 종단 흐름을 잡고, 통합 시 `/review-domain-fitness` 로 절단·이중입력·중복모델을 적출.
+
 ## 6. Plan 문서
 - `docs/plans/` 3-tier(Phase → Epic → Story). 포맷은 `docs/PLANNING.md`.
 - `planner`만 plan 파일 Write. 메인 세션 직접 Write 금지.
