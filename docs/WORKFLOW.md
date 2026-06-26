@@ -4,6 +4,7 @@
 
 ## 전체 흐름
 ```
+/phase 0 →  도메인·IA 산출물 (스토리맵·워크플로우·화면IA md 1장)  [domain-fitness-reviewer 검증]
 /phase   →  plan 작성 (Phase → Epic → Story)         [planner + architect 자동검증]
 /issue   →  Epic Issue + 모든 Story Issue 일괄 생성   [type/area/phase 라벨, sub-issue]
 /branch  →  Story 브랜치 분기  <type>/<issue#>-<slug>
@@ -16,6 +17,7 @@
                     (dev DB 분리·도메인·백업·에러추적·테스트·리뷰·핸드오프)
                     BLOCK 0 이어야 SHIP. [commercial|demo]
 ```
+- **`/phase 0` = 적합성(fitness) 게이트 — craft 전에 "맞는 걸 만드는가".** 나머지 게이트·리뷰어는 전부 per-file/per-slice 로 *잘 만드는가(craft)* 만 본다 → 슬라이스마다 Critical 0으로 머지돼도 합쳐진 시스템이 *맞는가*는 누구 담당도 아니어서 재설계가 늦게·오너가 손으로 뒤집힌다. `/phase 0`은 그 전역 시야를 코드 전으로 당긴다: **도메인 스토리맵 + 핵심 워크플로우 3~5개 + 화면 IA(무드 1줄)** 를 md 1장으로 쓰고 `domain-fitness-reviewer`(+`plan-consistency`)가 검증한 뒤에만 `/phase 1`(스키마·화면) 진입. 산출물 빈칸은 템플릿 `docs/plans/*.template.md`. **중량 의식(이벤트스토밍·DDD) 금지 — md 1장이 상한**(대상 규모가 작으면 과설계). 이 산출물이 이후 `domain-fitness-reviewer`·`design-reviewer`(무드 바)의 채점 기준표가 된다.
 - 구현은 **메인 세션(opus)** 이 직접(약한 서브에이전트 위임 X). 구현 보조 스킬:
   - 새 도메인 모듈 → `/feature-scaffold <name>` (표준 `features/` + `pages/` 구조)
   - DB 스키마 변경 → `/db-migration <slug>` (RLS enable + rollback 주석, `INFRA.md`)
