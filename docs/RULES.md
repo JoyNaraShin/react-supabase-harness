@@ -15,7 +15,7 @@
 - `/check`(typecheck + biome) — 작업 중 상시. `src/` 편집 5회마다 훅이 권고.
 - `/verify`(typecheck + biome + build) — **PR·머지 직전 필수**.
 - DB 변경 → `supabase db reset` 로컬 통과 + 타입 재생성(`pnpm gen:types`).
-- in-loop 자문: `/review-structure`(+ 보안·DB 영향 시 `/review-stability`, + UI 변경 시 `/review-craft`) Critical 0 + Major 0 — *자기-스폰이라 머지 보증 아님*. **머지 최종 게이트 = 외부 네이티브 `/code-review`**(중요 변경 `ultra`), 각 발견 독립검증(§11).
+- in-loop 자문(**선택적 — 변경 성격 매칭 렌즈 1개만**): 슬라이스/Story 단위는 해당 렌즈만 호출 — 구조·플로우 `/review-structure` · 보안·DB `/review-stability` · UI `/review-craft`. **3렌즈 전수는 Epic 통합 완료·prod-readiness 시점만**(2026-07-09 리뷰 D2: 비구속 자문이 외부 게이트와 같은 무게로 도는 이중 리뷰는 레이트리밋 헤드룸 낭비). Critical 0 + Major 0 — *자기-스폰이라 머지 보증 아님*. **머지 최종 게이트 = 외부 네이티브 `/code-review`**(중요 변경 `ultra`), 각 발견 독립검증(§11).
 
 ## 4. (→ INFRA.md) Migration Safety
 DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 = 한 논리 변경 · RLS enable + policy 필수 · `-- rollback:` 주석 · destructive op 분리.

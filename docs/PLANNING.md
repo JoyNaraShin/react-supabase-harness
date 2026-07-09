@@ -39,7 +39,7 @@
 - [ ] `pnpm typecheck` PASS
 - [ ] `pnpm check` PASS (biome)
 - [ ] (선택) `pnpm build` PASS
-- [ ] **`/review-structure` Critical 0 + Major 0** (필수)
+- [ ] **변경 성격 매칭 렌즈 `/review-*` Critical 0 + Major 0** (1개 — RULES §3)
 **파일 예상**:
 - src/path/to/file.tsx
 **커밋 경계**: `<type>(<scope>): <한 줄>`
@@ -48,7 +48,7 @@
 - 단일 관심사 + 리뷰 가능 크기(diff ~500줄). 의존 그래프 선형·얕은 트리(깊이 ≤2).
 
 ## Phase plan 섹션
-목표 / 사전 조건 / **Decision Register** / 파일 변경 요약(표) / Slices(4블록) / 검증(phase 전체 — 모든 S + 통합 + `/review-structure` Critical 0 + Major 0) / 비고.
+목표 / 사전 조건 / **Decision Register** / 파일 변경 요약(표) / Slices(4블록) / 검증(phase 전체 — 모든 S + 통합 + **3렌즈 전수**(/review-structure·stability·craft) Critical 0 + Major 0) / 비고.
 
 ## Epic plan 섹션 (7, ~80줄)
 1 상위 Phase plan 링크 / 2 큰 흐름(3~6) / 3 Epic-level 결정(표: 항목·결정·검토한 대안·뒤집힐 조건 — 휘발성 우선) / 4 Story 분할(표: 제목·Plan·Issue) / 5 검증(Epic-level) / 6 머지 후 follow-up / 7 롤백(요약).
