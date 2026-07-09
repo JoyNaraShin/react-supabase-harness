@@ -2,8 +2,9 @@
 
 이 하네스가 강제하는 규칙. 스킬·에이전트가 이 문서를 참조한다. 스택: React 19 + Vite + TS strict + Tailwind v4 + React Router v7 + Supabase + TanStack Query.
 
-## 1. Plan vs Execute
-- **Plan 먼저.** ad-hoc 코딩 금지. `planner`가 `docs/plans/`에 슬라이스 플랜을 쓰고, **메인 세션**이 슬라이스 1개씩 구현한다(구현은 고판단 작업 — 약한 모델 서브에이전트에 위임하지 않는다).
+## 1. Plan vs Execute (변경 크기 비례)
+- **한 문장 diff 는 플랜 생략.** 오타·로그 한 줄·rename·단일 파일 소수정처럼 **diff 를 한 문장으로 말할 수 있으면** planner·issue·branch 없이 메인 세션이 직접 수정한다 — 단 커밋은 여전히 `/commit` 승인 게이트로만(§9 불변).
+- **그 이상은 Plan 먼저.** 새 기능·다파일·스키마 변경은 `planner`가 `docs/plans/`에 슬라이스 플랜을 쓰고, **메인 세션**이 슬라이스 1개씩 구현한다(구현은 고판단 작업 — 약한 모델 서브에이전트에 위임하지 않는다). 애매하면 플랜 쪽으로.
 - Plan 작성 직후 `structure-fitness-reviewer` 자동 검증(가장 싼 시점). Critical/Major 0 또는 사용자 OK 후 진행.
 
 ## 2. Conventional Commits

@@ -22,12 +22,11 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 4. **ad-hoc** — slug 단독 → `docs/plans/<slug>.md`. Phase plan 축소판(슬라이스 포맷 유지).
 5. **issue** — GitHub Issue 번호/링크 → Issue body 기반(Epic이면 Epic plan, Story면 Story plan).
 
-## 인터뷰 게이트 (플랜 쓰기 전 — 조기 확정 방지)
-플랜을 쓰기 전에 **열린 결정(Open Decisions)** 을 식별한다: 답에 따라 아키텍처·스키마·UX가 바뀌는 결정(데이터 모델 형태 · 타입 인터페이스 · UX 분기 · 권한 경계 등). 이런 결정이 있으면:
-- **한 번에 한 질문**, 아키텍처가 바뀔 질문 우선순위로, **최대 5문항**까지 호출자(사용자)에게 묻는다. 각 질문엔 후보 2~3개 + 트레이드오프 1줄을 붙인다.
-- 답을 받으면 그 결정을 Decision Register(→ `PLANNING.md`)에 대안·사유와 함께 기록하고 플랜을 쓴다.
-- **금지**: 자신이 모르는 선호를 자신감 있는 명세로 세탁하는 것(임의로 하나 골라 acceptance 로 확정). 물을 수 없는 상황(비대화형)이면 해당 결정을 Decision Register 에 `미확정 — 가정: <채택 가정>` 으로 명시하고 진행한다.
-- 범위 자체가 불명확(무엇을 만들지조차 모호)하면 → 되묻고 종료. 범위는 명확하나 결정만 열려 있으면 → 위 인터뷰.
+## 열린 결정 처리 (조기 확정 방지 — 인터뷰는 메인 세션 몫)
+너는 서브에이전트라 사용자와 대화형 인터뷰가 **불가능**하다(출력이 단일 메시지로 귀환). 인터뷰(한 번에 한 질문 · 아키텍처 우선 · ≤5문항)는 `/phase` 스킬 §2에서 **메인 세션이 planner 스폰 전에** 수행하고, 그 결과가 프롬프트에 "인터뷰 결과 Decision Register 초안"으로 들어온다.
+- 초안이 **있으면**: 그 결정들을 Decision Register(→ `PLANNING.md`)에 대안·사유와 함께 옮겨 적고 플랜을 쓴다.
+- 초안이 **없거나 부족한데** 열린 결정(답에 따라 아키텍처·스키마·UX가 바뀌는 것)을 발견하면: **금지** — 자신이 모르는 선호를 자신감 있는 명세로 세탁하는 것(임의로 하나 골라 acceptance 로 확정). 대신 해당 결정을 Decision Register 에 `미확정 — 가정: <채택 가정>` 으로 명시하고, 최종 보고에 **미확정 질문 목록**(후보 2~3개 + 트레이드오프 1줄씩)을 붙여 메인 세션이 후속 인터뷰를 돌릴 수 있게 한다.
+- 범위 자체가 불명확(무엇을 만들지조차 모호)하면 → 되묻고 종료.
 
 **항상 먼저 읽을 것**: `CLAUDE.md` · `docs/RULES.md`·`docs/PLANNING.md`(Plan 3단 계층 정본). Epic 모드 → **상위 Phase plan** 존재 확인(없으면 에러). Story 모드 → **상위 Epic plan** 존재 확인(없으면 에러).
 
@@ -52,7 +51,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 1. 입력 모드·범위 확정.
 2. 필수 문서 Read. **상위 plan 존재 확인**(Epic→Phase, Story→Epic; 없으면 에러 종료).
 3. Glob/Grep 기존 구조 탐색(중복 구현 확인).
-4. **인터뷰 게이트**(위 §) — 열린 결정 식별·질문·Decision Register 기록.
+4. **열린 결정 처리**(위 §) — 인터뷰 초안 소비 또는 `미확정 — 가정` 기록 + 미확정 질문 목록 준비.
 5. 모드별 분할: Phase 3~7 슬라이스 / Epic 큰 흐름+결정 표+Story 분할 표(~80줄, 세부는 Story 위임) / Story 1 PR 세부 acceptance+검증+self-check+롤백 / ad-hoc 축소판. **Phase·ad-hoc 플랜은 Decision Register 를 Slices 위에 강제**(`PLANNING.md` 포맷).
 6. 의존 그래프 선형·얕은 트리(깊이 ≤2) 점검 — 순환/복잡 시 재분할.
 7. Write로 `docs/plans/<target>.md`.

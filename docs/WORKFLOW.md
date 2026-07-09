@@ -18,7 +18,8 @@
                     BLOCK 0 이어야 SHIP. [commercial|demo]
 ```
 - **`/phase 0` = 적합성(fitness) 게이트 — craft 전에 "맞는 걸 만드는가".** 나머지 게이트·리뷰어는 전부 per-file/per-slice 로 *잘 만드는가(craft)* 만 본다 → 슬라이스마다 Critical 0으로 머지돼도 합쳐진 시스템이 *맞는가*는 누구 담당도 아니어서 재설계가 늦게·오너가 손으로 뒤집힌다. `/phase 0`은 그 전역 시야를 코드 전으로 당긴다: **도메인 스토리맵 + 핵심 워크플로우 3~5개 + 화면 IA(무드 1줄)** 를 md 1장으로 쓰고 `structure-fitness-reviewer`(+`plan-consistency`)가 검증한 뒤에만 `/phase 1`(스키마·화면) 진입. 산출물 빈칸은 템플릿 `docs/plans/*.template.md`. **중량 의식(이벤트스토밍·DDD) 금지 — md 1장이 상한**(대상 규모가 작으면 과설계). 이 산출물이 이후 `structure-fitness-reviewer`·`craft-reviewer`(무드 바)의 채점 기준표가 된다.
-- 구현은 **메인 세션(opus)** 이 직접(약한 서브에이전트 위임 X). 구현 보조 스킬:
+- **한 문장 diff 는 이 파이프라인을 생략한다**(RULES §1) — 오타·로그 한 줄·rename 급은 planner·issue·branch 없이 직접 수정 → `/commit` 승인 게이트만. 그 이상부터 위 흐름.
+- 구현은 **메인 세션(세션 모델)** 이 직접(약한 서브에이전트 위임 X). 구현 보조 스킬:
   - 새 도메인 모듈 → `/feature-scaffold <name>` (표준 `features/` + `pages/` 구조)
   - DB 스키마 변경 → `/db-migration <slug>` (RLS enable + rollback 주석, `INFRA.md`)
 
