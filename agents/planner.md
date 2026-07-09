@@ -38,7 +38,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 - [ ] `pnpm typecheck` PASS
 - [ ] `pnpm check` PASS (biome)
 - [ ] (선택) `pnpm build` PASS
-- [ ] **`/review-structure` Critical 0 + Major 0** (필수)
+- [ ] **변경 성격 매칭 렌즈 `/review-*` Critical 0 + Major 0** (1개 — RULES §3)
 **파일 예상**:
 - src/path/to/file.tsx
 - supabase/migrations/YYYYMMDD_*.sql
@@ -66,7 +66,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 ## Decision Register  (휘발성 결정 — PLANNING.md 포맷, Slices 위 강제)
 ## 파일 변경 요약  (| 파일 | 작업 |)
 ## Slices  (각 §슬라이스 4블록)
-## 검증 (phase 전체)  — 모든 S 통과 / 통합·수동 확인 / **/review-structure Critical 0 + Major 0**
+## 검증 (phase 전체)  — 모든 S 통과 / 통합·수동 확인 / **3렌즈 전수(/review-structure·stability·craft) Critical 0 + Major 0**
 ## 비고
 ```
 ### Epic — `phase-<n>-epic-<seq>-<slug>.md` (~80줄, 7섹션)
@@ -77,7 +77,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 ## 2. 큰 흐름  (3~6 bullet)
 ## 3. Epic-level 결정  (| # | 항목 | 결정 | 검토한 대안 | 뒤집힐 조건 |)  — 휘발성(데이터 모델·타입·UX 분기) 우선, 세부 acceptance는 Story 위임
 ## 4. Story 분할  (| # | 제목 | Plan | Issue |)
-## 5. 검증 (Epic-level)  — 모든 Story PR merge / /review-structure Critical 0 + Major 0
+## 5. 검증 (Epic-level)  — 모든 Story PR merge / **3렌즈 전수(/review-structure·stability·craft) Critical 0 + Major 0**
 ## 6. 머지 후 follow-up
 ## 7. 롤백  (요약 — 상세는 Story)
 ```
@@ -87,7 +87,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 > 상위 Epic plan 링크
 ## 1. 범위 + 의존  (범위 1 PR / 의존 / 커밋 경계 / GitHub Issue#→Epic# sub-issue)
 ## 2. Acceptance  (파일별 세부: 2.1 DB / 2.2 데이터 레이어 / 2.3 컴포넌트)
-## 3. 검증 게이트  — pnpm typecheck/check/build / (DB) supabase db reset / 수동 회귀 시나리오(데이터+step+예상) / /review-structure Critical 0 + Major 0 / (선택) /review-stability
+## 3. 검증 게이트  — pnpm typecheck/check/build / (DB) supabase db reset / 수동 회귀 시나리오(데이터+step+예상) / 변경 성격 매칭 렌즈 /review-* Critical 0 + Major 0 (1개)
 ## 4. 1주 self-check  (예상 파일·커밋·LOC·블로커·리스크·소요)
 ## 5. 롤백  (코드 git revert / DB rollback SQL / 후속 의존)
 ## 6. 진행 상태  (체크리스트)
