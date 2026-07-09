@@ -2,6 +2,7 @@
 name: auth-scaffold
 description: 인증 스캐폴드 결정적 생성 — profiles 마이그레이션(RLS·자동생성 트리거·is_admin) + src/features/auth(로그인·useAuth·ProtectedRoute) + 라우트 배선. 회원제 프로젝트의 반복 인프라를 매번 맨손으로 짓지 않게 한다.
 disable-model-invocation: true
+allowed-tools: Bash(date *), Bash(supabase *), Bash(pnpm *), Write, Read, Glob, Grep
 argument-hint: [--roles admin,member(기본) | --oauth google 등 추가 옵션]
 ---
 
@@ -14,6 +15,12 @@ react-supabase-stack 프로젝트에 **이메일/비밀번호 인증 + 역할(pr
 ## 1. 마이그레이션 생성 (`/db-migration` 규약: RLS enable + rollback 주석)
 `supabase/migrations/<ts>_auth_profiles.sql`:
 ```sql
+-- private 스키마: RLS 헬퍼·트리거 전용 (자기완결 — 템플릿엔 마이그 0개 전제)
+create schema if not exists private;
+-- SECURITY DEFINER 여도 호출자는 schema USAGE 가 필요 — 없으면 member 의
+-- 첫 profiles SELECT 가 permission denied (db reset 은 통과, 런타임에만 터짐)
+grant usage on schema private to authenticated;
+
 -- profiles: auth.users 1:1, 역할 기반 인가의 SoT
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -46,25 +53,28 @@ create policy "profiles_select_own" on public.profiles for select
   using (id = (select auth.uid()) or (select private.is_admin()));
 create policy "profiles_update_own_no_role" on public.profiles for update
   using (id = (select auth.uid())) with check (id = (select auth.uid()) and role = 'member');
+-- ⚠ with check(true) 금지: permissive 정책의 WITH CHECK 는 USING 매칭과 무관하게
+-- OR 로 결합된다 → member 의 `set role='admin'` 이 이 true 로 통과(권한상승).
 create policy "profiles_admin_update" on public.profiles for update
-  using ((select private.is_admin())) with check (true);
+  using ((select private.is_admin())) with check ((select private.is_admin()));
 
 -- rollback:
 -- drop trigger on_auth_user_created on auth.users; drop function private.handle_new_user();
 -- drop function private.is_admin(); drop table public.profiles;
+-- (private 스키마는 다른 마이그가 공유할 수 있으면 유지, 이 마이그가 유일 사용자면 drop schema private;)
 ```
-> `private` 스키마 부재 시 선행 마이그로 생성. admin 부트스트랩은 배포 후 SQL 1회(`update profiles set role='admin' where id='<uuid>'`) — 문서에 기록. 새 RLS 테이블이므로 pgTAP 커버리지 게이트(INFRA) 대상.
+> admin 부트스트랩은 배포 후 SQL 1회(`update profiles set role='admin' where id='<uuid>'`) — 문서에 기록. 새 RLS 테이블이므로 pgTAP 커버리지 게이트(INFRA) 대상.
 
 ## 2. feature 생성 (`src/features/auth/`)
 `/feature-scaffold` 구조(api/components/hooks/types.ts/index.ts) 준수:
 - **api/auth.ts** — `signIn(email, pw)` `signOut()` `getSession()` `getProfile()` (전부 `getSupabase()` 경유, zod 입력 검증).
 - **hooks/useAuth.ts** — TanStack Query: `useSession()`(`onAuthStateChange` 구독 + queryClient 캐시 동기화), `useProfile()`, `useSignIn()`/`useSignOut()` mutation.
-- **components/LoginPage.tsx** — `components/ui` 프리미티브만 사용(Button·Card). 로딩·에러 상태 포함(한국어 메시지).
+- **LoginPage** — 라우트 타겟이므로 `src/pages/auth/LoginPage.tsx` 에 생성(RULES §8: 라우트 타겟 = `src/pages/{module}/`). `components/ui` 프리미티브만 사용(Button·Card), 로딩·에러 상태 포함(한국어 메시지). auth feature 의 훅·api 를 barrel 로 소비.
 - **components/ProtectedRoute.tsx** — 세션 없으면 `paths.login` redirect, `requiredRole` prop. **주석에 명시: 이 가드는 UX 편의이지 인가가 아님 — 실제 인가는 RLS.**
 - **index.ts** — barrel(외부는 barrel 만 import).
 
 ## 3. 라우트 배선
-- `routes/paths.ts` 에 `login` 추가 · `routes/routes.tsx` 에 LoginPage(lazyComponent) + 보호 대상 라우트를 `<ProtectedRoute>` 로 감싸는 예시 1개.
+- `routes/paths.ts` 에 `login` 추가 · `routes/routes.tsx` 에 `@/pages/auth/LoginPage`(lazyComponent — 템플릿 관례) + 보호 대상 라우트를 `<ProtectedRoute>` 로 감싸는 예시 1개.
 
 ## 4. 마무리
 - `supabase db reset` 로컬 통과 + `pnpm gen:types` + `/check`.
