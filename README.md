@@ -22,8 +22,8 @@ If your project doesn't match, fork and adapt rather than installing as-is.
 | 컴포넌트 | |
 |---|---|
 | `hooks/` — 안전·자동화 훅 5종 (아래 표) | ✅ |
-| `skills/` — new-project / issue / branch / commit / pr / phase (0=도메인·IA) / check / verify / review-* (architect·security·ui·design·db·react·domain-fitness) / db-migration / feature-scaffold / prod-readiness (18) | ✅ |
-| `agents/` — planner / architect-reviewer / security-reviewer / ux-reviewer / design-reviewer / db-reviewer / react-reviewer / domain-fitness-reviewer (opus) · plan-consistency-reviewer / verifier (sonnet) — 10 | ✅ |
+| `skills/` — new-project / issue / branch / commit / pr / phase (0=도메인·IA) / check / verify / review-* (structure·stability·craft) / db-migration / feature-scaffold / prod-readiness (14) | ✅ |
+| `agents/` — planner / structure-fitness-reviewer / stability-reviewer / craft-reviewer (세션 모델 상속) · plan-consistency-reviewer / verifier (sonnet 하드핀 — 기계 패스만, RULES §11) — 6 | ✅ |
 | `docs/` — RULES / PLANNING / WORKFLOW / INFRA / BOOTSTRAP | ✅ |
 
 신규 프로젝트는 보일러플레이트 `react-supabase-stack`(별도 레포)에서 스캐폴드 → `/new-project`로 부트스트랩. 전체 day-1 절차는 [`docs/BOOTSTRAP.md`](docs/BOOTSTRAP.md). 작업 흐름은 [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
@@ -36,7 +36,7 @@ If your project doesn't match, fork and adapt rather than installing as-is.
 |---|---|---|---|
 | `block-destructive-git` | PreToolUse / Bash | `git commit`·`push --force`·`reset --hard`·`rm -rf` 등 파괴적 명령 **차단**(`CLAUDE_COMMIT_APPROVED=1` = `/commit`만 우회). 파싱 실패 시 fail-closed | git 명령 차단(파일 변경 없음) |
 | `format-on-edit` | PostToolUse / Edit·Write | 편집 직후 biome 포맷(`src/` 대상). **프로젝트-로컬 `node_modules/.bin/biome` 있을 때만** — 없으면 skip(네트워크 설치 안 함) | 편집 파일 in-place 포맷 |
-| `security-nudge` | PostToolUse / Edit·Write | auth·migrations·supabase.*·storage.*·`.env*` 편집 시 `/review-security` 권고 주입 | 없음(텍스트 주입) |
+| `security-nudge` | PostToolUse / Edit·Write | auth·migrations·supabase.*·storage.*·`.env*` 편집 시 `/review-stability` 권고 주입 | 없음(텍스트 주입) |
 | `edit-counter` | PostToolUse / Edit·Write | `src/` 편집 5회 누적 시 `/check` 권고 | 없음 |
 | `session-start-summary` | SessionStart | 브랜치·Phase·미커밋 3줄 요약 주입 | 없음(git 읽기만) |
 
