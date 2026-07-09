@@ -34,7 +34,7 @@ tools: Read, Grep, Glob, Bash
 ## 입력 해석 · 절차
 1. **디스커버리 1회** — `CLAUDE.md` + `docs/RULES.md` Read(자동 상속 X). 대상 명시 시 그 범위, 없으면 `git diff main...HEAD --name-only`(비면 프로젝트 전체 종단 감사). 단일 파일이면 그 feature 전체 + 진입점 자동 확장. **타깃 사용자·규모(소규모/대규모)를 확정**(과설계 바). 최종 범위 + 바를 Summary 상단 명시.
 2. `src/` 트리 + `App.tsx`·`main.tsx`·`routes/*` + feature `index.ts` 로 구조 지도, `grep -r 'from "@/features/'` 로 의존 그래프.
-3. 스키마 종단 인벤토리(`supabase/migrations/**` 또는 MCP introspection) → 핵심 엔티티를 `grep -r "<name>" src/` 로 소비 코드 대조(고아/절단 적출). 핵심 워크플로우 1~2개를 화면→화면→데이터로 재현 추적.
+3. 스키마 종단 인벤토리(`supabase/migrations/**` 또는 MCP introspection) → 핵심 엔티티를 `grep -r "<name>" src/` 로 소비 코드 대조(고아/절단 적출). 핵심 워크플로우 1~2개를 화면→화면→데이터로 재현 추적. **`docs/plans/phase-0-domain-dossier.md` 존재 시 §2 공통 엔티티·§4 엣지 규칙 대비 누락을 적합성 축에서 대조하라 — 도시에가 있는데 백지 내부 정합만으로 FIT 판정 금지**(자기정합적이지만 틀린 도메인이 통과하는 구멍).
 4. 담당 재확인·양보 → severity → 리포트. **절대 파일 수정 안 함.**
 
 ## Severity
