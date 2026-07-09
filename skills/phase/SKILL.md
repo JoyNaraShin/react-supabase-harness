@@ -8,7 +8,7 @@ argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-
 `planner` 에 3-tier(Phase → Epic → Story) plan 작성·갱신 위임. `docs/PLANNING.md`(plan 포맷)·`docs/RULES.md`(계획 규칙) 기준. Plan → Epic Issue → Story Issue 일괄 → feature 브랜치 진입점.
 
 ## 1. 모드 / 경로
-- **Phase 0 (도메인·IA)**: `/phase 0 [slug]` → `docs/plans/phase-0-domain.md`. 코드·스키마 전 적합성 산출물(스토리맵·워크플로우·화면IA — `PLANNING.md` Phase 0 3블록). 작성 후 **`/review-structure` FIT 판정 권고** → Phase 1 진입.
+- **Phase 0 (도메인·IA)**: `/phase 0 [slug]` → `docs/plans/phase-0-domain.md`. 코드·스키마 전 적합성 산출물(스토리맵·워크플로우·화면IA·가정표 — `PLANNING.md` Phase 0 4블록). **greenfield 면 `docs/plans/phase-0-domain-dossier.md` 존재 확인 — 없으면 `/domain-research` 먼저 권고**(사용자가 스킵을 승인하면 진행하되 가정 표 첫 행에 `도시에 부재` 명시). 작성 후 **`/review-structure` FIT 판정 권고** → Phase 1 진입.
 - **Phase**: `/phase <n> [slug]` → `docs/plans/phase-<n>-<slug>.md`. slug 미지정 시 기존 `phase-<n>-*.md` 탐색(정확히 1개=갱신, 0개=에러, 2+=slug 요구).
 - **Epic**: `/phase <n> epic <seq> <slug>` → `docs/plans/phase-<n>-epic-<seq>-<slug>.md`. (~80줄 cap, 큰 흐름·Story 분할만). 상위 Phase plan 존재 전제.
 - **Story**: `/phase <n> epic <seq> story <story-seq> <slug>` → `...-story-<story-seq>-<slug>.md`. (1 PR 단위 세부 Acceptance + 수동 회귀). 상위 Epic plan 전제. **Single-Story Epic 도 분리 필수.**
@@ -19,7 +19,7 @@ planner 는 서브에이전트라 사용자와 대화형 루프가 불가능하�
 - 대상 범위에서 **열린 결정**(답에 따라 아키텍처·스키마·UX가 바뀌는 것 — 데이터 모델 형태·타입 인터페이스·UX 분기·권한 경계)을 식별. 없으면 생략하고 §3.
 - AskUserQuestion 으로 **한 번에 한 질문**, 아키텍처가 바뀔 질문 우선, **최대 5문항**. 각 질문에 후보 2~3개 + 트레이드오프 1줄.
 - 답을 **Decision Register 초안**(`| 결정 | 선택 | 검토한 대안 | 사유 | 뒤집힐 조건 |`)으로 정리해 §3 planner 프롬프트에 포함.
-- update 모드·Phase 0 은 보통 생략 가능(신규 Phase/Epic/Story 가 주 대상).
+- update 모드는 보통 생략 가능. **Phase 0(greenfield)은 인터뷰 필수** — 최소 입력(배경·목표·디자인 방향)일수록 도메인 미지가 최대인 지점이 여기다. 도시에 §5(설계 갈림길)를 질문 재료로 쓰면 각 질문에 "레퍼런스 A는 X, B는 Y" 를 병기할 수 있어 오너가 도메인 비전문이어도 답할 수 있다. 미답 항목은 planner 가 가정 표에 기록.
 
 ## 3. 에이전트 호출
 - `subagent_type: "planner"` 로 Agent 1회. 프롬프트: `대상 파일: <경로> / 모드: create|update / Tier: Phase|Epic|Story / Phase:<n>[,Epic:<seq>][,Story:<story-seq>] / slug:<slug>. PLANNING.md 의 해당 tier 필수 섹션 준수. agents/planner.md 스펙 전체 따름.` + (§2 수행 시) `인터뷰 결과 Decision Register 초안: <표>`

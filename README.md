@@ -22,7 +22,7 @@ If your project doesn't match, fork and adapt rather than installing as-is.
 | 컴포넌트 | |
 |---|---|
 | `hooks/` — 안전·자동화 훅 5종 (아래 표) | ✅ |
-| `skills/` — new-project / issue / branch / commit / pr / phase (0=도메인·IA) / check / verify / review-* (structure·stability·craft) / db-migration / feature-scaffold / prod-readiness (14) | ✅ |
+| `skills/` — new-project / domain-research / issue / branch / commit / pr / phase (0=도메인·IA) / check / verify / review-* (structure·stability·craft) / db-migration / feature-scaffold / auth-scaffold / prod-readiness (16) | ✅ |
 | `agents/` — planner / structure-fitness-reviewer / stability-reviewer / craft-reviewer (세션 모델 상속) · plan-consistency-reviewer / verifier (sonnet 하드핀 — 기계 패스만, RULES §11) — 6 | ✅ |
 | `docs/` — RULES / PLANNING / WORKFLOW / INFRA / BOOTSTRAP | ✅ |
 
