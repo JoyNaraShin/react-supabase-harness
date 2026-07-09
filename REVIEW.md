@@ -25,3 +25,12 @@
 - PreToolUse 차단: `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`, 또는 exit code 2(stderr=메시지). 레거시 top-level `{"decision":"block"}`은 비권장.
 - 컨텍스트 주입: `hookSpecificOutput.additionalContext`(+ `hookEventName`).
 - 플러그인 에이전트 허용필드: name·description·model·tools·disallowedTools·skills·memory·background·isolation(worktree)·effort·maxTurns.
+
+## 종합 규약 집행 (복수 리뷰어 종합 시)
+
+복수 적대 렌즈를 병렬로 돌린 뒤 결과를 종합할 때, 종합 규약(원장 join·보존 검사·severity 운반·재대조 큐)의 **집행 주체는 메인 루프 산문이 아니라 `scripts/synthesize.py`** 다. 산문 원칙(글로벌 `~/.claude/REVIEW.md` §종합 규약)은 그대로지만, 커버리지·충실도 누수는 회계로 막고 루프의 압축 편향을 집행에서 배제한다. 근거: 2026-07-09 감사 테마 T-F(V2 "원장 소비단계가 메인루프 산문뿐", V3 "plan-consistency 원장 미emit", V5 "보존검사 스크립트화").
+
+- **rule 1 (모든 reviewer 원장 emit)**: 이제 `agents/*.md` 리뷰어 전원이 리포트 끝에 machine-readable 결함 원장을 emit 한다 — `plan-consistency-reviewer` 포함(각 agent 스펙이 강제). 문구가 사실이 됐다.
+- **모드 A (종합 시작)**: `python3 scripts/synthesize.py <report1.md> <report2.md> ...` — agent별 행 수 집계 + 전 행 union 의 join 표 스켈레톤(목적지·처리 빈칸 강제, 메인 루프가 채움) 출력. 원장을 못 찾은 리포트는 크게 경고하고 exit≠0(침묵 스킵 금지).
+- **모드 B (종합 후 검증)**: `python3 scripts/synthesize.py --check <joined.md> <report1.md> ...` — 종합 문서에 모든 `agent:id` 가 보존됐는지(누락=침묵 드롭) + 원본 severity 문자열이 각 행에 보존됐는지(불일치=강등 의심) 대조, 있으면 exit 1. `처리=merged/rejected` 행은 "적대 재대조 큐"로 별도 출력(rule 5 부분집합 — 판단 개입 행만 독립 재확인).
+- 표준 라이브러리만 사용 · 파싱 관대(펜스/표·컬럼 변형 허용), 실패는 시끄럽게.

@@ -5,9 +5,10 @@ disable-model-invocation: true
 argument-hint: [경로 | 비우면 현재 브랜치 diff 기준]
 ---
 
-`stability-reviewer`(세션 모델 상속, 적대적) 서브에이전트로 보안·DB 안정성 리뷰.
+`stability-reviewer`(세션 모델 상속, 적대적·실측) 서브에이전트로 보안·DB 안정성 리뷰. 공격 표면(Auth/RLS 정확성·시크릿·입출력)과 DB 성능·정합(스키마·인덱스·트랜잭션·마이그레이션)을 한 렌즈로, 대표 볼륨 `EXPLAIN` 으로 실측한다.
 
 > **in-loop 자문** — 자기-스폰이라 머지 보증이 아니다. 머지 최종 게이트는 외부 네이티브 `/code-review`(RULES §11).
+> **MCP 전제**: 라이브 introspection·`EXPLAIN`·`get_advisors` 를 위해 `supabase`(또는 프로젝트의 supabase MCP) 활성 필요. 없으면 마이그레이션·코드 정적 리뷰로 폴백(실측 부재를 리포트에 명시). **데이터 규모**를 에이전트에 알려준다(과설계 방지) — 무결성 결함은 규모 무관, 성능 결함은 실측·규모 근거 필수.
 
 ## 1. 대상 확정
 - `$ARGUMENTS` 있으면 그 경로
