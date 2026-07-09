@@ -1,6 +1,6 @@
 # INFRA — Supabase / 마이그레이션 / 인증 (정본)
 
-`db-migration` 스킬과 `security-reviewer`가 참조. 스택: Supabase(Postgres + Auth + Storage + RLS).
+`db-migration` 스킬과 `stability-reviewer`가 참조. 스택: Supabase(Postgres + Auth + Storage + RLS).
 
 ## Migration Safety
 - **한 마이그레이션 = 한 논리적 변경.** 모듈 다르면 분리.

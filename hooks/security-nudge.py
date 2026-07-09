@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""PostToolUse hook — 보안 민감 파일 편집 시 `/review-security` 권장 힌트 주입.
+"""PostToolUse hook — 보안 민감 파일 편집 시 `/review-stability` 권장 힌트 주입.
 
 Edit/Write 가 인증·RLS·시크릿·스토리지 경로(아래 is_security_risk)를 건드리면
-`additionalContext` 로 `/review-security` 권장을 주입한다. 같은 파일 연속 편집은
+`additionalContext` 로 `/review-stability` 권장을 주입한다. 같은 파일 연속 편집은
 1회만 알린다(last_path 디바운스) — 새 위험 파일로 옮길 때마다 다시 알림.
 
-review-security 스킬은 disable-model-invocation 이라 모델이 자동 호출하지 못한다.
+review-stability 스킬은 disable-model-invocation 이라 모델이 자동 호출하지 못한다.
 그래서 "위험 diff인데 보안 리뷰가 조용히 누락"되는 것을 이 훅이 넛지로 메운다.
 (edit-counter 가 /check 를 넛지하는 것과 동일한 패턴.)
 
@@ -71,7 +71,7 @@ def main() -> None:
 
     msg = (
         f"🔐 보안 민감 파일 변경: {path}. "
-        "PR/머지 전 `/review-security` (인증·RLS·시크릿·PII·OAuth·Storage 5축) 실행 권장."
+        "PR/머지 전 `/review-stability` (인증·RLS·시크릿·입출력 + DB 정합) 실행 권장."
     )
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",

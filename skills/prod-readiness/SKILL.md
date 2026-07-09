@@ -44,8 +44,8 @@ allowed-tools: Read, Glob, Grep, Bash(git *), Bash(grep *), Bash(cat *)
 - [ ] **핵심 플로우 수동 검증**(인증·결제·데이터 쓰기·실데이터 마이그레이션) — 사용자 확인
 
 ### F. 리뷰 게이트 (honor-system 강제 흡수)
-- [ ] `/review-architect` Critical/Major **0**
-- [ ] 보안 민감 변경(auth·migrations·supabase.*·.env) 있었으면 `/review-security` 통과 — `security-nudge` 훅 이력 참고
+- [ ] `/review-structure` Critical/Major **0**
+- [ ] 보안 민감 변경(auth·migrations·supabase.*·.env) 있었으면 `/review-stability` 통과 — `security-nudge` 훅 이력 참고
 - [ ] **외부 `/code-review`** Critical **0** (= 실제 머지/배포 허가, WORKFLOW §최종 게이트). 미실행이면 BLOCK
 
 ### G. 핸드오프/운영 (`commercial` 전용)

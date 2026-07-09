@@ -33,7 +33,7 @@
    pnpm gen:types            # database.types.ts 생성
 
 6. /phase 0 <slug>           # 도메인·IA 산출물(스토리맵·워크플로우·화면IA md 1장)
-   → domain-fitness-reviewer 검증(FIT) 후에만 다음. "맞는 걸 만드는가"를 스키마 전에.
+   → structure-fitness-reviewer 검증(FIT) 후에만 다음. "맞는 걸 만드는가"를 스키마 전에.
    /phase 1 <slug>           # planner plan + architect 자동검증 (스키마·화면)
 
 7. /issue (Epic + Story)  →  /branch  →  구현  →  /check

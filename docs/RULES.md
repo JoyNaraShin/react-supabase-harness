@@ -4,7 +4,7 @@
 
 ## 1. Plan vs Execute
 - **Plan 먼저.** ad-hoc 코딩 금지. `planner`가 `docs/plans/`에 슬라이스 플랜을 쓰고, **메인 세션**이 슬라이스 1개씩 구현한다(구현은 고판단 작업 — 약한 모델 서브에이전트에 위임하지 않는다).
-- Plan 작성 직후 `architect-reviewer` 자동 검증(가장 싼 시점). Critical/Major 0 또는 사용자 OK 후 진행.
+- Plan 작성 직후 `structure-fitness-reviewer` 자동 검증(가장 싼 시점). Critical/Major 0 또는 사용자 OK 후 진행.
 
 ## 2. Conventional Commits
 - `<type>(<scope>): <subject>` — 70자 이내. type: feat/fix/chore/docs/refactor/test.
@@ -14,14 +14,14 @@
 - `/check`(typecheck + biome) — 작업 중 상시. `src/` 편집 5회마다 훅이 권고.
 - `/verify`(typecheck + biome + build) — **PR·머지 직전 필수**.
 - DB 변경 → `supabase db reset` 로컬 통과 + 타입 재생성(`pnpm gen:types`).
-- in-loop 자문: `/review-architect`(+ 보안 영향 시 `/review-security`) Critical 0 + Major 0 — *자기-스폰이라 머지 보증 아님*. **머지 최종 게이트 = 외부 네이티브 `/code-review`**(중요 변경 `ultra`), 각 발견 독립검증(§11).
+- in-loop 자문: `/review-structure`(+ 보안·DB 영향 시 `/review-stability`, + UI 변경 시 `/review-craft`) Critical 0 + Major 0 — *자기-스폰이라 머지 보증 아님*. **머지 최종 게이트 = 외부 네이티브 `/code-review`**(중요 변경 `ultra`), 각 발견 독립검증(§11).
 
 ## 4. (→ INFRA.md) Migration Safety
 DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 = 한 논리 변경 · RLS enable + policy 필수 · `-- rollback:` 주석 · destructive op 분리.
 
 ## 5. 도메인 적합성 (고아 테이블 금지)
 - **테이블엔 화면이 따라온다.** 스키마에 엔티티/컬럼/FK/트리거를 추가하는 슬라이스는, 그것을 **읽는/쓰는 화면(또는 RPC 소비) 슬라이스를 같은 Epic 안에 명시**해야 한다. 시드·스키마만 있고 소비 코드 0인 **고아/절단 금지**(데이터가 가치까지 흐르지 못함 — 재설계의 단골 원인).
-- 코드 전 `/phase 0` 도메인·IA 게이트(`PLANNING.md`)에서 종단 흐름을 잡고, 통합 시 `/review-domain-fitness` 로 절단·이중입력·중복모델을 적출.
+- 코드 전 `/phase 0` 도메인·IA 게이트(`PLANNING.md`)에서 종단 흐름을 잡고, 통합 시 `/review-structure` 로 절단·이중입력·중복모델을 적출.
 
 ## 6. Plan 문서
 - `docs/plans/` 3-tier(Phase → Epic → Story). 포맷은 `docs/PLANNING.md`.
@@ -49,7 +49,8 @@ DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 
 - 전체 흐름: `/phase`(plan) → `/issue`(Epic+Story) → `/branch` → `/commit` → `/pr`.
 
 ## 11. 리뷰 독립성 (자기변호 방지)
-- **리뷰어 역량 ≥ 작성자 · 작성자와 다른 인스턴스 · 적대적(refute 기본값).** 약한 모델이 강한 모델 산출물을 리뷰하면 *역량 부족으로* 러버스탬프 → plan·코드 모두 **메인 세션(opus) 작성 → 별도 인스턴스의 적대적 opus(`architect-reviewer`)가 in-loop 리뷰**. plan은 추가로 싼 sonnet(`plan-consistency-reviewer`) 일관성 패스가 補.
-- **모델 분담 원칙**: 약한 모델(sonnet)은 *결정적·기계적* 작업만 — `verifier`(typecheck/biome/build), `plan-consistency-reviewer`(포맷 체크). **고판단(구현·plan·아키/보안 리뷰)은 최강 모델.** (구현 위임용 약한 executor 서브에이전트는 거짓 절약이라 폐지.)
+- **리뷰어 = 작성자 티어 이상 · 작성자와 다른 인스턴스 · 적대적(refute 기본값).** 약한 모델이 강한 모델 산출물을 리뷰하면 *역량 부족으로* 러버스탬프 → plan·코드 모두 **메인 세션 작성 → 별도 인스턴스의 적대 리뷰어가 in-loop 리뷰**. plan은 추가로 싼 하위 티어(`plan-consistency-reviewer`) 일관성 패스가 補.
+- **리뷰어 모델은 상속이 기본값 — 특정 모델 하드핀 금지.** 리뷰 에이전트는 `model:`을 지정하지 않고 세션 모델(=저자)을 상속한다. 그래야 메인 모델 세대가 바뀌어도(Fable↔Opus 등) "리뷰어 ≥ 작성자"가 자동 유지된다. *2026-07-09 감사 U1: opus 하드핀 상태에서 메인만 Fable로 올라가 이 원칙이 소리 없이 역전된 사고. 의도적으로 하위 티어 리뷰어를 쓰려면 이 조항을 명시적으로 개정할 것 — 침묵 역전 금지.*
+- **모델 분담 원칙**: 하위 티어(sonnet급)는 *결정적·기계적* 작업만 — `verifier`(typecheck/biome/build), `plan-consistency-reviewer`(포맷 체크). 이 둘만 하드핀 허용(기계 작업은 세대 무관). **고판단(구현·plan·적대 리뷰)은 세션 모델 상속.** (구현 위임용 약한 executor 서브에이전트는 거짓 절약이라 폐지.)
 - **자기-스폰 리뷰(`/review-*`)는 통과 보증이 아니다.** 머지 최종 게이트는 **외부 네이티브 `/code-review`**(중요 변경 `ultra`) — 모델·인프라 독립 + 발견 독립검증. 내부 OK ≠ 머지 허가.
 - 단발 감사 = 그 스냅샷만 클린. 새 코드엔 새 외부 리뷰.
