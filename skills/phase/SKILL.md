@@ -14,22 +14,29 @@ argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-
 - **Story**: `/phase <n> epic <seq> story <story-seq> <slug>` → `...-story-<story-seq>-<slug>.md`. (1 PR 단위 세부 Acceptance + 수동 회귀). 상위 Epic plan 전제. **Single-Story Epic 도 분리 필수.**
 - 인자 비었으면 사용법 출력 후 종료.
 
-## 2. 에이전트 호출
-- `subagent_type: "planner"` 로 Agent 1회. 프롬프트: `대상 파일: <경로> / 모드: create|update / Tier: Phase|Epic|Story / Phase:<n>[,Epic:<seq>][,Story:<story-seq>] / slug:<slug>. PLANNING.md 의 해당 tier 필수 섹션 준수. agents/planner.md 스펙 전체 따름.`
+## 2. 인터뷰 게이트 (planner 스폰 **전** — 메인 세션이 수행)
+planner 는 서브에이전트라 사용자와 대화형 루프가 불가능하다(출력이 단일 메시지로 귀환). 인터뷰는 이 스킬을 실행하는 **메인 세션**이 한다:
+- 대상 범위에서 **열린 결정**(답에 따라 아키텍처·스키마·UX가 바뀌는 것 — 데이터 모델 형태·타입 인터페이스·UX 분기·권한 경계)을 식별. 없으면 생략하고 §3.
+- AskUserQuestion 으로 **한 번에 한 질문**, 아키텍처가 바뀔 질문 우선, **최대 5문항**. 각 질문에 후보 2~3개 + 트레이드오프 1줄.
+- 답을 **Decision Register 초안**(`| 결정 | 선택 | 검토한 대안 | 사유 | 뒤집힐 조건 |`)으로 정리해 §3 planner 프롬프트에 포함.
+- update 모드·Phase 0 은 보통 생략 가능(신규 Phase/Epic/Story 가 주 대상).
+
+## 3. 에이전트 호출
+- `subagent_type: "planner"` 로 Agent 1회. 프롬프트: `대상 파일: <경로> / 모드: create|update / Tier: Phase|Epic|Story / Phase:<n>[,Epic:<seq>][,Story:<story-seq>] / slug:<slug>. PLANNING.md 의 해당 tier 필수 섹션 준수. agents/planner.md 스펙 전체 따름.` + (§2 수행 시) `인터뷰 결과 Decision Register 초안: <표>`
 - not found 시 `general-purpose` 재호출(앞머리에 planner.md 를 시스템 프롬프트로 읽으라 지시).
 - plan 파일 Write 는 planner 가 수행. 메인 세션은 요약 1줄: `✓ <path> (<N> slices|stories) [created|updated]`.
 
-## 3. 자동 검증 (적대적 · 2종, plan 단계가 가장 싼 시점)
-planner(=opus) Write 직후 메인 세션이 **작성자와 다른 인스턴스**로 둘 다 자동 호출:
+## 4. 자동 검증 (적대적 · 2종, plan 단계가 가장 싼 시점)
+planner(세션 모델 상속) Write 직후 메인 세션이 **작성자와 다른 인스턴스**로 둘 다 자동 호출:
 - **`plan-consistency-reviewer`(sonnet, 싼 기계 패스)** — PLANNING.md 4블록 준수·acceptance 테스트가능성·자가모순·미정의 참조·의존 그래프 sanity.
 - **`structure-fitness-reviewer`(세션 모델 상속, 적대적 판단)** — 구조(모듈·의존·경계·진화) + 적합성(종단·폐곡선·고아/절단).
 
 두 리포트 **그대로** 노출. Critical/Major 있으면 사용자 결정 → plan patch. 둘 다 Critical 0 + Major 0 또는 사용자 OK 시 진입.
 > 리뷰어 ≥ 작성자 · 다른 인스턴스 · 적대적(RULES §11). 이 자동검증은 **in-loop 자문**이며, 코드 머지의 최종 게이트는 외부 네이티브 `/code-review`(WORKFLOW).
 
-## 4. 금지
+## 5. 금지
 - 코드 편집 / git 커밋·브랜치 — 이 스킬은 plan 문서 전용
 - planner 우회해 메인 세션이 직접 plan Write — 항상 planner 경유
 
-## 5. 전체 흐름
+## 6. 전체 흐름
 `Phase plan → Epic plan → Story plan(각 1파일) → Epic Issue + 모든 Story Issue 일괄(/issue) → /branch → /commit → /pr`
