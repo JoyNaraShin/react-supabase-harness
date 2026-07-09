@@ -2,6 +2,7 @@
 name: domain-research
 description: 도메인 도시에(dossier) 생성 — greenfield 수주에서 Phase 0 이전에 성숙 SaaS teardown·엣지 규칙·용어를 리서치해 "백지 설계"를 "대조 설계"로 바꾼다. 오너가 도메인 비전문 영역이라도 초기 구조를 리뷰 가능하게 만드는 상류 장치.
 disable-model-invocation: true
+allowed-tools: Agent, Read, Write, Glob, Grep, WebSearch, WebFetch, AskUserQuestion
 argument-hint: <버티컬/제품 한 줄 설명> (예: "필라테스 스튜디오 회원·수강권 관리")
 ---
 

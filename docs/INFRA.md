@@ -21,7 +21,7 @@
     language sql stable security definer set search_path = '' as $$
     select exists (select 1 from public.profiles
                    where id = (select auth.uid()) and role = 'admin'); $$;
-  revoke execute on function private.is_admin() from public, anon;
+  revoke execute on function private.is_admin() from public;  -- from public 이 정본(#266) — anon 별도 revoke 는 중복
   grant execute on function private.is_admin() to authenticated;
   ```
 - enum 타입(role/type 등) 권장 — 타입 생성 시 union 리터럴.
