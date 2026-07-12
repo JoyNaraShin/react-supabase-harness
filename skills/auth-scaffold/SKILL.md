@@ -17,8 +17,8 @@ react-supabase-stack 프로젝트에 **이메일/비밀번호 인증 + 역할(pr
 ```sql
 -- private 스키마: RLS 헬퍼·트리거 전용 (자기완결 — 템플릿엔 마이그 0개 전제)
 create schema if not exists private;
--- SECURITY DEFINER 여도 호출자는 schema USAGE 가 필요 — 없으면 member 의
--- 첫 profiles SELECT 가 permission denied (db reset 은 통과, 런타임에만 터짐)
+-- schema USAGE: 정책 InitPlan 경로엔 불필요(정책은 소유자 권한으로 함수명 해석)하나,
+-- 향후 private 함수를 직접 호출하는 코드 경로 대비 grant. 무해.
 grant usage on schema private to authenticated;
 
 -- profiles: auth.users 1:1, 역할 기반 인가의 SoT
@@ -46,7 +46,14 @@ returns boolean language sql security definer set search_path = '' stable as $$
   select exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'admin')
 $$;
 revoke execute on function private.is_admin() from public;
-grant execute on function private.is_admin() to authenticated;
+-- ⚠ anon 에도 EXECUTE 필수 — 누락 시 미인증 원격 DoS(Critical). Supabase 기본값이
+-- anon 에 신규 public 테이블 SELECT 를 부여하므로, 미인증 요청이 아래 select 정책의
+-- (select private.is_admin()) InitPlan 을 anon 권한으로 실행 → PG 17.6 은 permission
+-- denied 대신 세그폴트(엔진 버그) → postmaster 가 전 백엔드 강제종료+재시작 = 전 DB 다운.
+-- anon 은 항상 admin 아님(auth.uid() null)이라 EXECUTE 부여는 누출 없음. RLS 헬퍼 표준.
+grant execute on function private.is_admin() to authenticated, anon;
+-- 방어심화: anon 은 profiles(PII) 에 접근할 이유 없음 — 테이블 도달 자체를 차단.
+revoke all on public.profiles from anon;
 
 -- 정책: 본인 row 읽기 + admin 전체 읽기 / role 변경은 admin만
 create policy "profiles_select_own" on public.profiles for select
@@ -63,7 +70,7 @@ create policy "profiles_admin_update" on public.profiles for update
 -- drop function private.is_admin(); drop table public.profiles;
 -- (private 스키마는 다른 마이그가 공유할 수 있으면 유지, 이 마이그가 유일 사용자면 drop schema private;)
 ```
-> admin 부트스트랩은 배포 후 SQL 1회(`update profiles set role='admin' where id='<uuid>'`) — 문서에 기록. 새 RLS 테이블이므로 pgTAP 커버리지 게이트(INFRA) 대상.
+> admin 부트스트랩은 배포 후 SQL 1회(`update profiles set role='admin' where id='<uuid>'`) — 문서에 기록. admin 은 자기 role 을 member 로 강등할 수 있어 **마지막 admin 자기강등 시 락아웃**(복구 = 위 부트스트랩 SQL 재실행) — 운영 문서에 명시. 새 RLS 테이블이므로 pgTAP 커버리지 게이트(INFRA) 대상 — 커버리지에 **anon 미인증 SELECT 가 크래시 없이 0행**(N1 회귀 방지)을 포함할 것.
 
 ## 2. feature 생성 (`src/features/auth/`)
 `/feature-scaffold` 구조(api/components/hooks/types.ts/index.ts) 준수:
