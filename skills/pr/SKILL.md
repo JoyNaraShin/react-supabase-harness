@@ -18,6 +18,7 @@ argument-hint: [--draft] [--no-close] [--title=<t>] [--body-file=<path>]
 - main 이면 에러: `"main 에서 PR 불가. /branch 로 분기"`
 - 커밋 0건이면 경고: `"커밋 없음. /commit 먼저"`
 - upstream 없으면 `git push -u origin <branch>` 자동
+- **verify 게이트(ready PR 선행조건):** 이 세션에서 `/verify`(또는 `verifier` 에이전트) PASS 를 확인하지 못했으면 **ready PR 를 열지 않는다** — `--draft` 로만 열거나, 먼저 `verifier` 를 호출해 PASS 를 받는다. RULES §3 "verify = 머지 직전 필수" 를 PR 시점에 기계적으로 강제(무인 실행 시 미검증 머지 방지). 사용자가 명시적으로 강행하면 경고 1줄 후 진행.
 
 ## 3. 메시지 조립
 **title**: `--title` 또는 최신 커밋 subject(single) / 브랜치 slug 기반.

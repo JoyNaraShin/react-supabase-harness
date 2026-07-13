@@ -56,8 +56,10 @@ def main() -> None:
 
     if state["count"] >= THRESHOLD:
         msg = (
-            f"⚠️  `src/` 편집 {state['count']}회 누적. "
-            "변경 검증 주기 — `/check` (typecheck + biome) 또는 `/verify` (full) 실행 권장."
+            f"⚠️  `src/` 편집 {state['count']}회 누적 — 검증 주기. "
+            "메인 세션이 `verifier` 에이전트를 직접 호출(typecheck+biome)하거나, "
+            "사용자에게 `/check`·`/verify` 실행을 안내하라. "
+            "(`/check`·`/verify` 는 disable-model-invocation 이라 모델이 직접 못 켠다.)"
         )
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",

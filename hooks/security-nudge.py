@@ -71,7 +71,9 @@ def main() -> None:
 
     msg = (
         f"🔐 보안 민감 파일 변경: {path}. "
-        "PR/머지 전 `/review-stability` (인증·RLS·시크릿·입출력 + DB 정합) 실행 권장."
+        "PR/머지 전 메인 세션이 `stability-reviewer` 에이전트를 직접 호출하거나, "
+        "사용자에게 `/review-stability` 실행을 안내하라 "
+        "(`/review-stability` 는 disable-model-invocation 이라 모델이 직접 못 켠다)."
     )
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",

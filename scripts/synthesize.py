@@ -270,6 +270,19 @@ def _find_lines_containing(text, needle):
     return [ln for ln in text.splitlines() if needle in ln]
 
 
+def _severity_present(sev, line):
+    """severity 가 line 에 '토큰'으로 보존됐는지 — 부분문자열 오검출 방지(2026-07-13 T8).
+
+    'Low' 가 'below'/'slow' 안에, 'High' 가 'highlight' 안에 우연히 매칭돼
+    강등을 놓치는 것을 막는다. severity 의 첫 단어(예: 'Critical(운영)' → 'critical')를
+    단어 경계로 대조.
+    """
+    base = re.split(r"[\s(]", sev.strip(), 1)[0]
+    if not base:
+        return True
+    return re.search(rf"(?<![a-z]){re.escape(base.lower())}(?![a-z])", line.lower()) is not None
+
+
 def mode_b(joined_path, report_paths):
     """모드 B — 보존 검사 + 재대조 큐."""
     _, all_rows, warnings, _valid_empty = _load_all(report_paths)
@@ -290,7 +303,7 @@ def mode_b(joined_path, report_paths):
             missing.append((origin, r["severity"], r["oneliner"]))
             continue
         sev = r["severity"].strip()
-        if sev and not any(sev.lower() in ln.lower() for ln in hosting):
+        if sev and not any(_severity_present(sev, ln) for ln in hosting):
             sev_mismatch.append((origin, sev, hosting[0].strip()))
 
     # 재대조 큐: joined 표에서 처리=merged/rejected 인 행.
