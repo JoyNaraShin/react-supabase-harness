@@ -51,12 +51,13 @@ If your project doesn't match, fork and adapt rather than installing as-is.
 /plugin install react-supabase-harness@react-supabase
 ```
 
-로컬 dogfood:
+로컬 dogfood / 하네스 개발:
 ```bash
-claude --plugin-dir /path/to/react-supabase-harness   # 로드
+claude --plugin-dir /path/to/react-supabase-harness   # 소스 직결 로드
 /reload-plugins                                                # 변경 후 재로드
 ```
-> 플러그인은 **버전 고정 캐시**로 구동된다 — repo 수정·푸시 후 `/plugin`으로 재설치해야 반영된다.
+> **하네스를 수정하는 세션은 `--plugin-dir` 소스 직결을 권장** — 캐시 드리프트가 원천적으로 없다(수정이 즉시 반영, 재설치 불요).
+> 일반 사용은 **버전 고정 캐시**로 구동된다 — repo 수정·푸시 후 `claude plugin update react-supabase-harness@react-supabase`(또는 `/plugin` 재설치)로 반영. 설치본이 소스보다 뒤처지면 `hooks/plugin-drift-check.sh`(SessionStart)가 세션 시작 시 경고한다(2026-07-09 감사 T-A 재발 방지).
 
 ## 제거 / Uninstall
 

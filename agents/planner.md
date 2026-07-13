@@ -86,7 +86,7 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 # Story: Phase <n> / Epic <seq> / S<story-seq> — <제목>
 > 상위 Epic plan 링크
 ## 1. 범위 + 의존  (범위 1 PR / 의존 / 커밋 경계 / GitHub Issue#→Epic# sub-issue)
-## 2. Acceptance  (파일별 세부: 2.1 DB / 2.2 데이터 레이어 / 2.3 컴포넌트)
+## 2. Acceptance  (파일별 세부: 2.1 DB / 2.2 데이터 레이어 / 2.3 컴포넌트)  — 새 테이블 슬라이스면 `supabase/seed.sql` 도메인 시드 골격(대표 3~5행)을 acceptance 에 포함(데모·리뷰가 빈 화면 아닌 실데이터로 보이게)
 ## 3. 검증 게이트  — pnpm typecheck/check/build / (DB) supabase db reset / 수동 회귀 시나리오(데이터+step+예상) / 변경 성격 매칭 렌즈 /review-* Critical 0 + Major 0 (1개)
 ## 4. 1주 self-check  (예상 파일·커밋·LOC·블로커·리스크·소요)
 ## 5. 롤백  (코드 git revert / DB rollback SQL / 후속 의존)
