@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: 검증 실행 전담. typecheck + biome + (선택)build를 실행하고 PASS/FAIL을 간결한 리포트로 돌려준다. 코드 수정 / 추측 해석 / 재시도 금지.
-model: claude-sonnet-4-6
+model: sonnet
 tools: Bash, Read, Grep
 ---
 

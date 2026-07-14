@@ -46,11 +46,14 @@ returns boolean language sql security definer set search_path = '' stable as $$
   select exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'admin')
 $$;
 revoke execute on function private.is_admin() from public;
--- ⚠ anon 에도 EXECUTE 필수 — 누락 시 미인증 원격 DoS(Critical). Supabase 기본값이
--- anon 에 신규 public 테이블 SELECT 를 부여하므로, 미인증 요청이 아래 select 정책의
--- (select private.is_admin()) InitPlan 을 anon 권한으로 실행 → PG 17.6 은 permission
--- denied 대신 세그폴트(엔진 버그) → postmaster 가 전 백엔드 강제종료+재시작 = 전 DB 다운.
--- anon 은 항상 admin 아님(auth.uid() null)이라 EXECUTE 부여는 누출 없음. RLS 헬퍼 표준.
+-- ⚠ anon 에도 EXECUTE 필수. Supabase 기본값이 anon 에 신규 public 테이블 SELECT 를
+-- 부여하므로, 미인증 요청이 아래 select 정책의 (select private.is_admin()) InitPlan 을
+-- anon 권한으로 평가한다. anon 이 EXECUTE 없으면 그 쿼리가 permission denied 로 실패한다
+-- (로컬 실측[PG 17.x]에선 백엔드 비정상 종료까지 관측됐으나 엔진 원인은 미확정 — 이 주석은
+-- 그 특정 크래시 메커니즘을 사실로 단정하지 않는다). 어느 쪽이든 방어는 동일:
+-- (1) grant 로 anon 이 실행 가능하면 항상 false 반환(anon 은 auth.uid() null)이라 누출 없이
+-- 정상 처리되고, (2) 아래 revoke 로 anon 의 테이블 도달을 원천 차단한다. 이중 방어.
+-- RLS 헬퍼를 API 롤에 grant 하는 것은 Supabase 표준 패턴.
 grant execute on function private.is_admin() to authenticated, anon;
 -- 방어심화: anon 은 profiles(PII) 에 접근할 이유 없음 — 테이블 도달 자체를 차단.
 revoke all on public.profiles from anon;
