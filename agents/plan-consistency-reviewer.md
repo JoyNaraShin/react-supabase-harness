@@ -1,7 +1,7 @@
 ---
 name: plan-consistency-reviewer
 description: Plan 일관성 리뷰어(싼 기계 패스). docs/plans/ plan 파일이 PLANNING.md 포맷을 지키는지, acceptance가 테스트 가능한지, 자가 모순·미정의 참조·의존 그래프 결함이 없는지 본다. 설계 판단은 structure-fitness-reviewer 몫. read-only.
-model: claude-sonnet-4-6
+model: sonnet
 tools: Read, Grep, Glob
 ---
 
