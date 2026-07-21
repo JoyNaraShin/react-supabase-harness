@@ -39,7 +39,8 @@
 - **최종 머지 게이트(외부 · 무편향)**: PR/머지 직전 **네이티브 `/code-review`**(중요 변경은 `/code-review ultra`). 작성·자문과 독립된 외부 리뷰가 각 발견을 독립검증 → 이게 실제 머지 허가. 내부 리뷰가 OK여도 외부 리뷰 Critical 미해결이면 머지 금지.
 - 리뷰 독립성 원칙: **리뷰어 역량 ≥ 작성자 · 작성자와 다른 인스턴스 · 적대적**(RULES §11).
 - **서비스 게이트(코드 머지 ≠ done)**: 배포·핸드오프 직전 `/prod-readiness`. 코드 게이트(`/verify`)가 "컴파일되는가"라면 이건 "서비스로 띄울 수 있는가" — dev DB 분리·도메인·백업·에러추적·테스트·핸드오프를 BLOCK 0까지. done의 정의를 코드에서 서비스로 끌어올려 50% 벽을 넘긴다.
-- 안전: `block-destructive-git` 훅이 파괴적 git 차단. `/commit`만 합법 우회.
+- **기계 검증 ≠ 설계 검증.** `/check`·`/verify`(typecheck·biome·build)는 "컴파일되는가"만 판정한다 — 모듈 경계·계층 분리·타입 배치는 통과시킨 채 지나간다(2026-07-20 실측). 슬라이스가 구조를 건드렸으면 렌즈 리뷰 1개가 필수이며, `edit-counter` 훅이 편집 5회마다 둘 다 안내한다.
+- 안전: `block-destructive-git` 훅이 파괴적 git 차단(`/commit`만 합법 우회). `block-impl-delegation` 훅이 구현의 서브에이전트 위임 차단(RULES §모델분담 실효화). `workflow-entry-guard` 훅이 플랜 없는 `src/` 첫 코드 생성 시 이 문서를 1회 주입 — 하네스 미탑승 방지.
 
 ## 일일 리듬
 - 세션 시작 시 `session-start-summary` 훅이 브랜치·Phase·미커밋 3줄 주입.
