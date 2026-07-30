@@ -31,7 +31,8 @@ DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 
 ## 8. FE 컨벤션
 - **1 파일 = 1 컴포넌트 = 1 책임.**
 - `src/lib/` = **인프라 전용**(도메인 로직·Context·Provider·Hook·UI 금지). `supabase.ts`(타입드 singleton)·`env.ts`·`queryClient.ts`·`storage.ts` 등.
-- 디렉터리: `src/components/{ui,...}`(전역 공용) · `src/layouts/` · `src/routes/` · `src/pages/{module}/`(라우트 타겟) · `src/features/{module}/`(피처 전용: api/components/hooks/types.ts/index.ts).
+- 디렉터리: **목적별 분리가 규칙이고 아래 트리는 권장 형태**다(2026-07-30 사용자 결정 — "저럴 필요까진 없고 목적별로 잘 분리만 되어 있으면 돼"). 피처가 하나뿐인 앱에 `features/`를 강제하면 빈 껍데기가 생긴다. 단 **분리 축은 지켜야 한다**: 라우트 타겟 / 재사용 UI 프리미티브 / 도메인 로직 / 인프라가 서로 섞이지 않을 것. 권장 트리 = `src/components/{ui,...}`(전역 공용) · `src/layouts/` · `src/routes/` · `src/pages/{module}/`(라우트 타겟) · `src/features/{module}/`(피처 전용: api/components/hooks/types.ts/index.ts).
+- **디렉터리 외 §8 항목(Tailwind·alias·주석·strict)은 예외 없이 적용된다.** 같은 결정에서 명시됨. *2026-07-30 사고(같은 원인 2회째): 메인 세션이 `docs/RULES.md` 를 한 번도 읽지 않고 화면 3개를 순수 CSS·상대경로·수기 fetch 로 구현했고, 사용자 육안으로만 적발됐다. `workflow-entry-guard` 는 **플랜 유무**로 미탑승을 판정하는데 이 프로젝트엔 planner 가 쓴 플랜이 있어 통과시켰다 — **플랜이 있어도 스택 규칙은 안 읽힌다.** 그래서 스택 신호를 직접 보는 `stack-compliance-guard.py`(PostToolUse: Write|Edit)를 추가해 실효화: React 앱에서 `src/**` 코드 작성 시 tailwindcss·@tanstack/react-query·`@/*` alias 누락을 프로젝트당 1회 주입. 예외가 필요하면 **사용자에게 물어 결정하고 이 문서에 기록** — 말없이 다른 스택으로 진행 금지.*
 - **import 계층**: external → `@/lib` → `@/components/ui` → `@/features/{self}` → `@/features/{other}` **barrel만** → relative.
 - TS strict, **no `any`/`as any`/`@ts-ignore`**.
 - **외부 UI 컴포넌트 라이브러리 영구 금지**(shadcn/radix/MUI/antd/Chakra/HeadlessUI). Tailwind + 자체 primitives만.
