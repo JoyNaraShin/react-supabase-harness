@@ -12,11 +12,19 @@
 #   ~/.claude/settings.json 의 SessionStart 에 등록:
 #     bash ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/plugin-drift-check.sh
 #
-# 2026-08-07 개정 — 구판은 버전만 비교해서, 실제 사고를 통째로 놓쳤다:
-#   설치본에 hooks/ 디렉터리가 **아예 없어** 강제 장치 8개가 0개 가동 중이었는데
-#   메시지는 "드리프트: v0.16.0 != v0.17.0" 한 줄이었고, 세션이 읽고 지나갔다.
-#   게다가 처방("claude plugin update")이 무효였다 — 강제 장치를 만든 커밋 2개가
-#   로컬에만 있어 GitHub 에서 당겨봐야 그대로였다. 원인은 드리프트가 아니라 미푸시.
+# 2026-08-07 개정 — 구판은 버전만 비교해서, 처방이 실제로 왜 안 먹는지를 못 봤다.
+#   그날 실측: 설치본 v0.16.0 에 강제 장치 4개가 빠져 있었다(v0.17.0 추가분 3개 +
+#   v0.18.0 의 1개). 그런데 구판 메시지는 "드리프트 v0.16.0 != v0.17.0" 한 줄이었고
+#   세션이 읽고 지나갔다. 더 나쁜 건 처방이 두 번 무효였다는 것 —
+#     ① 강제 장치를 만든 커밋이 미푸시라 GitHub 에서 당겨봐야 그대로였고
+#     ② push 후에도 마켓플레이스 캐시가 3주 낡아 새 버전의 존재 자체를 몰라
+#        `claude plugin update` 가 "Plugin not found" 로 죽었다.
+#   그래서 신판은 넷을 각각 본다: 훅 실존 · 미푸시 · 마켓플레이스 신선도 · 버전.
+#
+#   ⚠️ 이 파일 자신도 첫 판에서 오진을 냈다. 설치본 경로를 cache/<mp>/<plugin>/ 로
+#   추측했는데 실제로는 그 아래 <version>/ 이 한 층 더 있어, 훅 6개가 멀쩡히 도는데
+#   "0개 가동"이라고 보고했다. 지금은 installed_plugins.json 의 installPath 를 읽는다 —
+#   레지스트리가 답을 갖고 있으면 경로 규칙을 추측하지 않는다.
 # ─────────────────────────────────────────────────────────────────────────────
 python3 - <<'EOF'
 import json, os, subprocess
@@ -33,14 +41,20 @@ def sh(args, cwd):
         return ""
 
 def installed_root():
-    """설치본 실경로. 캐시 배치가 바뀌어도 찾도록 후보를 훑는다."""
-    for p in (HOME / ".claude/plugins/cache/react-supabase/react-supabase-harness",
-              HOME / ".claude/plugins/repos/react-supabase/react-supabase-harness"):
-        if p.is_dir():
-            return p
-    base = HOME / ".claude/plugins"
-    hits = list(base.glob("*/*/react-supabase-harness")) if base.is_dir() else []
-    return hits[0] if hits else None
+    """설치본 실경로.
+
+    🔴 경로를 추측하지 않고 installed_plugins.json 의 installPath 를 읽는다.
+       첫 판은 cache/<marketplace>/<plugin>/ 을 설치본으로 봤는데, 실제 배치는
+       cache/<marketplace>/<plugin>/<version>/ 이라 한 층 더 깊다. 그래서 hooks/ 를
+       못 찾고 "강제 장치 0개 가동"이라는 **오진**을 냈다(2026-08-07 실측 — 실제로는
+       6개가 돌고 있었고 빠진 건 v0.17.0 추가분 3개였다).
+       레지스트리가 답을 갖고 있는데 경로 규칙을 추측한 것이 원인이다.
+    """
+    try:
+        j = json.loads((HOME / ".claude/plugins/installed_plugins.json").read_text())
+        return Path(j["plugins"][KEY][0]["installPath"])
+    except Exception:
+        return None
 
 problems = []   # (심각도, 사실, 처방)
 
@@ -68,14 +82,14 @@ if inst is None:
     problems.append(("CRIT", "설치본을 찾을 수 없다", "/plugin install react-supabase-harness"))
 elif not (inst / "hooks").is_dir():
     problems.append(("CRIT",
-        f"설치본에 hooks/ 가 없다 — 강제 장치 {len(expected)}개가 **0개 가동** 중",
-        "아래 push → update 순서"))
+        f"설치본({inst.name})에 hooks/ 가 없다 — 강제 장치 {len(expected)}개가 0개 가동",
+        "아래 marketplace update → plugin update 순서"))
 else:
     missing = [h for h in expected if not (inst / "hooks" / h).is_file()]
     if missing:
         problems.append(("CRIT",
             f"설치본에 훅 {len(missing)}/{len(expected)}개 없음: {', '.join(missing)}",
-            "아래 push → update 순서"))
+            "아래 marketplace update → plugin update 순서"))
 
 # ── 2. 미푸시 — 이게 있으면 update 처방 자체가 무효다
 unpushed = sh(["git", "log", "--oneline", "@{u}.."], SRC)
@@ -85,13 +99,26 @@ if unpushed:
         f"소스에 미푸시 커밋 {n}개 — 플러그인은 GitHub 에서 설치되므로 update 해도 안 올라온다",
         f"cd {SRC} && git push   (그 다음에야 update 가 의미 있다)"))
 
-# ── 3. 버전 드리프트
+# ── 3. 마켓플레이스 캐시 신선도 — 오늘(2026-08-07) update 가 "not found" 로 죽은 원인.
+#     캐시가 푸시보다 오래되면 새 버전의 존재 자체를 모른다. update 전에 갱신이 필요하다.
+try:
+    km = json.loads((HOME / ".claude/plugins/known_marketplaces.json").read_text())
+    last = km["react-supabase"]["lastUpdated"][:10]
+    head_date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], SRC)
+    if head_date and last < head_date:
+        problems.append(("CRIT",
+            f"마켓플레이스 캐시가 낡음 (갱신 {last} < 소스 최신 커밋 {head_date})",
+            "claude plugin marketplace update react-supabase   ← plugin update 보다 먼저"))
+except Exception:
+    pass
+
+# ── 4. 버전 드리프트
 try:
     ins = json.loads((HOME / ".claude/plugins/installed_plugins.json").read_text())
     cache_ver = ins["plugins"][KEY][0]["version"]
     if src_ver and cache_ver != src_ver:
         problems.append(("WARN", f"버전 드리프트 설치본 v{cache_ver} != 소스 v{src_ver}",
-                         "claude plugin update react-supabase-harness (재시작 후 적용)"))
+                         "claude plugin update react-supabase-harness@react-supabase (전체 id 필요·재시작 후 적용)"))
 except Exception:
     pass
 
