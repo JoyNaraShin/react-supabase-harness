@@ -1,0 +1,66 @@
+// 게이트 룰 — 하네스 기본. 집행자는 hooks/gate-engine.py 하나뿐이다.
+//
+// 룰 추가 = 이 파일에 덩어리 하나. 코드는 안 고친다.
+// 코드를 고치는 건 **새 술어(predicate)가 필요할 때뿐**이다.
+//
+// 술어 목록 (gate-engine.py PREDICATES):
+//   toolIn        [도구명…]                        이 도구 호출인가
+//   pathGlob      "패턴" | [패턴…]                  파일 경로 매칭
+//   bodyRegex     "정규식" | {pattern, except, flags}  본문 매칭 (except = 오탐 제외)
+//   pkgRef        {packages:[…]}                   패키지 참조 (설치명령·deps·import 동시)
+//   bodySizeOver  {lines, chars}                   '한 문장 diff' 초과 여부
+//   globExists    "패턴" | [패턴…]                  프로젝트에 해당 파일이 있는가
+//   harnessTarget true                             하네스 관할 프로젝트인가
+//   escapeHatch   "이름"                            탈출구가 켜졌는가
+//
+// when 은 AND 리스트. 각 항목에 "not": true 를 넣으면 부정.
+// 프로젝트에서 덮어쓰려면 $CLAUDE_PROJECT_DIR/.claude/gates/rules.jsonc 에 같은 id 로.
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "no-ui-library",
+      // RULES §8 「외부 UI 컴포넌트 라이브러리 금지」
+      "on": ["Write", "Edit", "Bash"],
+      "when": [
+        { "not": true, "escapeHatch": "ui-lib-gate-off" },
+        {
+          "pkgRef": {
+            "packages": [
+              "@mui/material", "@mui/core", "@mui/joy",
+              "@radix-ui",
+              "antd", "@ant-design",
+              "@chakra-ui",
+              "@headlessui",
+              "shadcn", "shadcn-ui",
+              "@mantine"
+            ]
+          }
+        }
+      ],
+      "action": "deny",
+      "off": "ui-lib-gate-off",
+      "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 「외부 UI 컴포넌트 라이브러리 금지」.\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
+    },
+
+    {
+      "id": "plan-first",
+      // RULES §1 「Plan vs Execute — 코드 먼저 금지」
+      // 소규모 편집(20줄·800자 이하)은 통과 — RULES §1 "한 문장 diff" 예외의 기계적 정의.
+      "on": ["Write", "Edit"],
+      "when": [
+        { "not": true, "escapeHatch": "plan-gate-off" },
+        { "harnessTarget": true },
+        { "pathGlob": ["*/src/*.ts", "*/src/*.tsx", "*/src/*.js", "*/src/*.jsx",
+                       "*/src/*.py", "*/src/*.sql", "*/src/*.svelte", "*/src/*.vue",
+                       "src/*.ts", "src/*.tsx", "src/*.js", "src/*.jsx",
+                       "src/*.py", "src/*.sql", "src/*.svelte", "src/*.vue"] },
+        { "not": true, "globExists": ["docs/plans/*.md"] },
+        { "bodySizeOver": { "lines": 20, "chars": 800 } }
+      ],
+      "action": "deny",
+      "off": "plan-gate-off",
+      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다.\n\n할 것 — 둘 중 하나:\n  ① `/phase` 로 슬라이스 플랜을 먼저 쓴다 (정석)\n  ② 정말 한 문장 diff 면 편집을 잘게 쪼갠다 (20줄·800자 이하는 통과)"
+    }
+  ]
+}
