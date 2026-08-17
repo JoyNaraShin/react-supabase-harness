@@ -18,6 +18,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/block-impl-delegation.py\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/gate-engine.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
