@@ -1,6 +1,6 @@
 # nara-stack-harness
 
-1인 풀스택 외주를 위한 **Claude Code 플러그인 하네스**. 이슈 플로우 스킬, 리뷰 서브에이전트, 안전·자동화 훅을 한 번에 설치해 모든 프로젝트를 동일한 워크플로우로 운영한다. 스택 기준: **React + Vite + Supabase**.
+1인 풀스택 개발을 위한 **Claude Code 플러그인 하네스**. 이슈 플로우 스킬, 리뷰 서브에이전트, 안전·자동화 훅을 한 번에 설치해 모든 프로젝트를 동일한 워크플로우로 운영한다. 스택 기준: **React + Vite + Supabase**.
 
 > A Claude Code plugin bundling an issue-flow (plan → issue → branch → commit → verify → PR → prod-readiness), adversarial review subagents, and safety/automation hooks for a **React + Vite + Supabase** workflow.
 
