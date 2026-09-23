@@ -34,10 +34,12 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
    ```
    - RLS 정책의 함수/`auth.uid()` 는 **`(select ...)` 로 래핑**(행별 재평가 방지).
    - admin 판별은 `private.is_admin()`(security definer, search_path='') 패턴.
+   - **표를 새로 만들면 Data API grant 경로 확인** — 맨 앞 마이그에 `alter default privileges in schema public … on tables` 가 없으면 이 마이그에 표별 `grant select, insert, update, delete on public.<name> to authenticated;`(+ `anon`/`service_role` 필요분) 을 같이 쓴다. 2026-10-30 부터 자동 grant 가 없어 안 쓰면 그 표만 조용히 403.
 5. **검증 체크리스트 출력**:
    - [ ] 테이블 생성 시 `enable row level security` + `create policy` 포함?
    - [ ] destructive(DROP·RENAME·ALTER COLUMN TYPE)면 별도 파일로 분리?
    - [ ] 상단 `-- rollback:` 주석 작성?
+   - [ ] 표 생성 시 Data API grant 경로 확보(앞선 default privileges 또는 표별 grant)?
 6. **후속 안내**:
    ```
    supabase db reset                                                  # 로컬 재적용
