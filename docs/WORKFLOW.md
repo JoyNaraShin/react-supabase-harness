@@ -29,6 +29,27 @@
 - `<type>/<issue#>-<slug>` (feat/fix/chore/docs/refactor). main/develop 직접 push 금지.
 - 1 Story = 1 브랜치 = 1 PR. squash merge → 단일 커밋(롤백은 `git revert <sha>` 1회).
 
+## 스택 PR 일괄 머지 (쌓인 PR 이 여러 개일 때)
+
+squash merge 는 "같은 내용, 다른 커밋"을 base 에 넣는다. 그래서 **리타깃만으로는 안 된다** —
+자식 브랜치의 3-way merge 가 부모의 squash 커밋과 충돌한다. 순서는 이렇다:
+
+1. **시작 전에 모든 브랜치의 head SHA 를 스냅샷**한다. 부모를 force-push 하는 순간
+   자식의 merge-base 가 사라지고, 그때 SHA 가 없으면 `git reflog origin/<branch>` 로
+   `@{1}` 을 캐야 한다(실측: 이걸로 한 번 복구했다).
+2. 머지 **직전에** 자식을 리베이스한다 — `git rebase --onto origin/<base> <부모의 옛 tip> <자식>`.
+   리타깃(`gh api -X PATCH .../pulls/N -f base=…`)은 그 다음.
+3. `gh api -X PUT repos/<o>/<r>/pulls/N/merge -f merge_method=squash`.
+   merge 커밋이 꺼진 레포면 `merge_method=merge` 는 **405** 로 막힌다.
+4. base 가 기본 브랜치가 아니면 PR 본문의 `Closes #N` 이 **무효**다 —
+   머지 뒤 `gh issue close` 로 일괄 정리한다.
+
+🔴 **배포 쿼터**: 머지 1건 = 배포 1건이다. Vercel Hobby 는 **하루 100건**(시간당 100 · 5분당 60).
+스택이 10건을 넘으면 머지 전에 `vercel.json` 의 `git.deploymentEnabled` 에서 대상 브랜치를
+`false` 로 내리고(그 설정은 **푸시된 커밋 기준으로 평가된다**), 머지가 끝난 뒤 되돌린다 —
+N 번 배포가 2 번이 된다. 실측 2026-09-22 에 31건 연속 머지로 24시간 빌드가 정지했고,
+2026-09-24 에 이 절차로 36건을 2 배포로 끝냈다.
+
 ## 라벨 3축
 - `type:` feat/fix/chore/docs/epic/task/bug
 - `area:` 모듈/도메인 (예: area:board, area:admin)
