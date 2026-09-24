@@ -22,7 +22,7 @@ tools: Read, Grep, Glob, Bash, SendMessage
 - **View↔Logic 분리·확장성** — 컨트롤러 훅 패턴이 패널엔 있는데 **폼엔 없으면 결함**(폼이 상태·검증·mutation 을 제일 엉키게 함). JSX 안에 `if`/변환/`.mutate(`가 보이면 뷰가 컨트롤러를 겸하는 것. 전역/공통·도메인 비종속 순수 함수는 util 로(feature 종속→그 feature, 전역→`src/lib`). **추출 트리거 회수** — "2번째 사용처면 추출" 신호가 있고 지금이 2번째면 복사가 아니라 회수. reference 대조(잘 짠 동형 모듈의 *표면*만 베꼈나 *이유*까지 구현했나).
 
 **기능적 UX·a11y (사용자가 막히는 것만 — 취향은 아래 디자인)**
-- **States** — 비동기 표면에 에러 상태 없음(throw → 백스크린, `errorElement`/ErrorBoundary 부재) → Major~Critical. 빈 상태·로딩 부재. mutation **pending 중 버튼 비활성·중복제출 가드** 없음.
+- **States** — 비동기 표면에 에러 상태 없음(throw → 백스크린, `errorElement`/ErrorBoundary 부재) → Major~Critical. 빈 상태·로딩 부재. mutation **pending 중 버튼 비활성·중복제출 가드** 없음. **에러가 빈 상태로 흡수되는 것**(`if (isPending || !data || data.length === 0) return null` — `error` 를 구조분해 안 해 fetch 실패가 "데이터 없음" 과 같은 화면이 된다) → 안전·작업지시 화면이면 Critical. 순서는 `isPending → error → empty`. 같은 훅을 쓰는 형제 화면과 **비대칭**인지 대조하라 — 한쪽만 놓친다.
 - **a11y** — `div`+`onClick`(시맨틱 `button`/`a` 여야 키보드 도달). form 입력에 `label`/`aria-label` 없음. 모달 **focus trap·Esc 닫기·포커스 복귀** 없음. `focus-visible` 제거하고 대체 없음.
 - **피드백·반응형·폼** — 파괴적 액션 확인 단계 없음. 에러 메시지에 **영문 원문·스택 노출**(한국어 매핑 `getUserMessage`/`errors.ts` 우회 — 비개발자 사용자) → Major. 데스크톱 전용 레이아웃(모바일 overflow), 터치 타겟 < 44px. 검증 타이밍·`inputMode`/`type` 부적절.
 
