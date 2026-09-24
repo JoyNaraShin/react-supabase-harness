@@ -61,10 +61,24 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      🔴 **먼저 도는 트리거가 쓰는 컬럼(`updated_at`·검색 컬럼 등)은 반드시 뺀다.** 트리거는
      이름 **알파벳 순**으로 돈다. 안 빼면 정상 쓰기가 100% 막히는데, **단일 트랜잭션 테스트는
      `now()` 가 고정이라 초록으로 통과한다**(실측 사고 1건).
+   - 🔴 **원격 DB 를 덤프해 레포에 남길 때는 `--schema public` 이 필수다.**
+     ```bash
+     supabase db dump --linked --data-only --schema public -f <경로>.sql
+     ```
+     스코프를 빼면 `auth.users`(이메일·암호 해시)와 **`auth.refresh_tokens`(유효한 세션 토큰)**
+     가 같이 담긴다. 실측 사고 2026-09-17: 그대로 푸시돼 수습이 **토큰 무효화 + force-push**
+     였다 — 푸시된 뒤에는 파일을 지우는 것만으로 끝나지 않는다.
+     🔴 **절차 문서에 주의를 적는 것으로 끝내지 말 것.** 사람이 기억해서 붙이는 플래그는
+     언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(예: `scripts/lint-sql-dump-scope.mjs` —
+     추적 대상 `*.sql` 에서 pg_dump 의 `Schema: <public 아님>` 헤더 · auth/storage/vault 로
+     들어가는 COPY·INSERT · 토큰·암호 컬럼 이름을 잡는다. 마이그레이션·pgTAP 경로는 제외하되
+     시크릿 컬럼 검사만은 전수).
+
 5. **검증 체크리스트 출력**:
    - [ ] 테이블 생성 시 `enable row level security` + `create policy` 포함?
    - [ ] destructive(DROP·RENAME·ALTER COLUMN TYPE)면 별도 파일로 분리?
    - [ ] 상단 `-- rollback:` 주석 작성?
+   - [ ] 덤프를 레포에 남겼다면 `--schema public` 으로 떴고, 파일에 `Schema: auth` 섹션이 없는가?
    - [ ] 표 생성 시 Data API grant 경로 확보(앞선 default privileges 또는 표별 grant)?
    - [ ] 새 함수에 `revoke all … from public, anon` + `grant execute … to authenticated`?
          (PUBLIC 기본 부여 **와** default privileges 의 anon 직접 GRANT 둘 다 있다)
