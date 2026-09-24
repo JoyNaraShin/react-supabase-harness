@@ -47,6 +47,14 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      ```
      검증은 `proacl` 문자열 패턴이 아니라 `has_function_privilege('anon', '<sig>', 'EXECUTE')` 로.
    - **표를 새로 만들면 Data API grant 경로 확인** — 맨 앞 마이그에 `alter default privileges in schema public … on tables` 가 없으면 이 마이그에 표별 `grant select, insert, update, delete on public.<name> to authenticated;`(+ `anon`/`service_role` 필요분) 을 같이 쓴다. 2026-10-30 부터 자동 grant 가 없어 안 쓰면 그 표만 조용히 403.
+   - 🔴 **그 `alter default privileges` 가 있으면 반대 방향 사고가 난다 — 신규 표는 authenticated 에도 `ALL` 이 자동으로 붙는다.** `revoke all … from public, anon` 만 쓰면 **DELETE 가 남는다.** 그리고 **DELETE 정책이 없어도 RLS 는 에러를 내지 않는다 — 0행을 조용히 지운다**(화면은 "지웠다"고 믿고 행은 남는다). 그래서 "정책을 안 만들었으니 막혔다" 는 추론이 두 번 틀린다.
+     ```sql
+     revoke all on public.<name> from public, anon, authenticated;   -- authenticated 까지
+     grant select, insert, update on public.<name> to authenticated; -- 필요한 것만 다시
+     ```
+     막았다고 **쓰기 전에** 그 롤로 직접 찔러 `42501` 을 눈으로 본다. 그리고 회귀락을 건다:
+     `not has_table_privilege('authenticated', 'public.<name>', 'DELETE')` 또는 "DELETE GRANT 유지 N표"
+     전수 카운트 단언. 없으면 **다음 표에서 그대로 되살아난다.**
    - **UPDATE 정책은 `USING`(OLD)과 `WITH CHECK`(NEW)을 나란히 쓴다.** WITH CHECK 이 더
      약하면 사용자가 행의 **부모를 바꿔 옮길 수 있다**(재부모화). 그리고 두 식 어느 쪽도
      *어떤 컬럼이 바뀌었는지*는 보지 않는다 — 컬럼 범위를 좁히려면 트리거가 필요하다.
@@ -80,6 +88,8 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
    - [ ] 상단 `-- rollback:` 주석 작성?
    - [ ] 덤프를 레포에 남겼다면 `--schema public` 으로 떴고, 파일에 `Schema: auth` 섹션이 없는가?
    - [ ] 표 생성 시 Data API grant 경로 확보(앞선 default privileges 또는 표별 grant)?
+   - [ ] 그 표의 **authenticated DELETE** 를 의도했나? `revoke all … from public, anon, authenticated`
+         후 필요한 것만 재부여했고, 그 롤로 찔러 `42501` 을 확인했나? (무정책 DELETE = 조용한 0행)
    - [ ] 새 함수에 `revoke all … from public, anon` + `grant execute … to authenticated`?
          (PUBLIC 기본 부여 **와** default privileges 의 anon 직접 GRANT 둘 다 있다)
    - [ ] 함수 인자를 바꿨으면 `create or replace` 가 아니라 `drop`+`create`, 그리고 ACL 재작성?
