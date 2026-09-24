@@ -18,6 +18,8 @@ disallowedTools: Write, Edit, NotebookEdit
 - `localStorage` 의 user/role 식별자를 **서버 검증 없이** 신뢰(값 바꿔 탈취), admin 판별 조회 **실패가 fallback 권한 승격** → Critical. OAuth `redirectTo` 동적 구성 open redirect. 라우트 가드로 페이지만 숨기고 **API/RLS 필터 없음**(URL·API 직호출 우회) → Major.
 - client 에서 `SUPABASE_SERVICE_ROLE_KEY` 참조 / 두 번째 `createClient` 로 RLS 우회 → Critical.
 - **RLS 정책 SQL 직접 평가** — 테이블/중간(M:N) 테이블 RLS 미enable → Critical. write 정책 `WITH CHECK` 누락(USING만) → Major. `using (true)` 또는 역할만 검사인데 **행-소유자·테넌트로 스코프돼야** 함, `auth.uid()`/JWT 아닌 **클라 전달값**으로 스코프 → Critical. `SECURITY DEFINER` `search_path=''` 미설정.
+- **UPDATE 정책은 `USING`(OLD)과 `WITH CHECK`(NEW)을 나란히 출력해 비교** — WITH CHECK 이 더 약하고 표에 부모 id 컬럼이 있으면 **재부모화**(행을 남의 부모로 옮김)를 의심, 부모별 UNIQUE 부재까지 겹치면 이중 차감 경로 → Critical. 두 식 모두 *어떤 컬럼이 바뀌었나*는 안 보므로, **화면에서 컨트롤을 뺀 권한 축소**(예: 폼에서 우선순위 제거)가 서버 가드 없이 머지되면 그 자체를 Major 로 적는다 — UI 제거는 집행이 아니다.
+- **컬럼 가드 트리거의 거짓 통과** — 가드가 `updated_at` 처럼 **먼저 도는 트리거**(이름 알파벳 순)가 쓰는 컬럼을 비교에 포함하면 정상 쓰기가 100% 막히는데, **pgTAP 은 파일 전체가 한 트랜잭션이라 `now()` 가 고정돼 초록**이다. 정상 경로 단언이 교차 트랜잭션(`session_replication_role = replica` 로 `updated_at` 되돌리기 등)으로 쓰여 있지 않으면 → Major(검증이 없는 것과 같다).
 - **함수 EXECUTE 권한은 `has_function_privilege(role,'schema.fn(args)','EXECUTE')`(실효 권한)로 확인** — `aclexplode`/ACL introspection 은 PUBLIC 기본 grant 를 놓쳐 false-green(`revoke … from anon,authenticated` 는 PUBLIC 잔존; `from public` 이어야). "고쳐짐" 단정 전 이 함수 + `get_advisors` 재실행.
 
 **Secrets · Input & Output**
