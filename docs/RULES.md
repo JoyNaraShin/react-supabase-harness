@@ -17,6 +17,8 @@
 - DB 변경 → `supabase db reset` 로컬 통과 + 타입 재생성(`pnpm gen:types`).
 - in-loop 자문(**선택적 — 변경 성격 매칭 렌즈 1개만**): 슬라이스/Story 단위는 해당 렌즈만 호출 — 구조·플로우 `/review-structure` · 보안·DB `/review-stability` · UI `/review-craft`. **3렌즈 전수는 Epic 통합 완료·prod-readiness 시점만**(2026-07-09 리뷰 D2: 비구속 자문이 외부 게이트와 같은 무게로 도는 이중 리뷰는 레이트리밋 헤드룸 낭비). Critical 0 + Major 0 — *자기-스폰이라 머지 보증 아님*. **머지 최종 게이트 = 외부 네이티브 `/code-review`**(중요 변경 `ultra`), 각 발견 독립검증(§11).
 
+- **화면은 눈으로 1회 본다 — 인증 뒤에 있어도.** 앱 화면이 로그인 뒤에 있으면 dev 전용 프리뷰 엔트리(`preview.html` + `src/preview/`)로 **뷰 컴포넌트를 props·시드 캐시만으로** 렌더해 캡처한다(토큰 위조 아님 — 인증이 필요 없는 조각만 본다). Vite 는 `index.html` 만 빌드 입력으로 잡아 prod 번들에 안 들어가고, tsconfig `include` 안이라 계약이 바뀌면 거기서 먼저 깨진다. QueryClient 는 `staleTime: Infinity · retry: false · refetchOnMount: false` + `setQueryData`(렌더 전에 심는다 — effect 면 첫 프레임이 로딩으로 찍힌다). **주 소비 조건에서 본다**(모바일 화면은 375 틀 안). 회귀 잠금은 클래스 존재 단언이 아니라 **극단 케이스를 프리뷰가 상시로 들고 있는 것**. 실측: 첫 캡처에서 flex 가 버튼을 한 글자씩 4줄로 쪼갠 결함이 나왔다 — typecheck·단위 테스트가 원리적으로 못 보는 자리다.
+
 ## 4. (→ INFRA.md) Migration Safety
 DB 마이그레이션 규약은 `docs/INFRA.md`. 핵심: 한 마이그레이션 = 한 논리 변경 · RLS enable + policy 필수 · `-- rollback:` 주석 · destructive op 분리.
 

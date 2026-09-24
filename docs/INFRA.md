@@ -2,6 +2,13 @@
 
 `db-migration` 스킬과 `stability-reviewer`가 참조. 스택: Supabase(Postgres + Auth + Storage + RLS).
 
+## Backfill (소급 데이터 보정)
+
+- **트리거와 같은 규칙을 그대로 소급하면 틀린다.** insert 시점엔 살아 있는 후보가 전부 과거지만, 소급에선 **그 행 이후에 생긴 것**이 후보에 섞인다. 후보를 `ref.created_at <= target.created_at` 으로 제한한다 — 이 조건은 소급에만 필요하고 트리거엔 불필요하다. "지금 하나뿐" 이 "그때도 하나였다" 는 아니다.
+- **일회용 UPDATE 로 적지 않는다.** 한 번 돌고 사라지는 DML 은 검증할 수 없다. `private.backfill_*()` 함수로 두고 마이그레이션이 한 번 호출한다 — pgTAP 이 픽스처를 만들어 **같은 코드**를 돌린다. 채운 행 수를 반환하게 해 "비어 있는 걸 전부 채우지 않았다" 를 단언한다.
+- dev 에 대상 행이 0개면 **실행 결과로는 아무것도 검증되지 않는다.** 함수+pgTAP 가 아니면 미검증 로직이 그대로 운영에 나간다.
+- 트리거가 이미 달린 뒤라면 픽스처는 `insert` 후 `update ... set col = null` 로 "트리거 이전 데이터" 를 만든다.
+
 ## Migration Safety
 - **한 마이그레이션 = 한 논리적 변경.** 모듈 다르면 분리.
 - 파일: `supabase/migrations/<YYYYMMDD>_<slug>.sql` (snake_case).
