@@ -47,6 +47,7 @@
 - Supabase Auth(이메일/비밀번호·OAuth). 가입 시 `profiles` 자동 생성 트리거. admin = `profiles.role = 'admin'`(수동 부트스트랩).
 - **client는 anon key 전용.** `SERVICE_ROLE_KEY`는 client 절대 금지. 민감 key에 `VITE_` 접두 금지.
 - 라우트 가드는 인가가 **아님** — API/RLS 필터가 실제 인가. 가드는 UX 편의.
+- 🔴 **비밀이 아닌 설정을 secret 에 넣지 않는다.** 경로 prefix·허용목록·도메인 목록처럼 **코드에 리터럴로 박혀 있는 값**을 키·토큰과 같은 칸에 두면 코드와 인프라가 따로 움직인다 — 새 지점을 코드로 추가해도 대시보드를 안 고치면 조용히 4xx 가 나고 화면엔 원인이 안 나온다(실측: 기능이 전부 머지된 채 업로드가 하루 400). 넣기 전에 **"유출되면 손해인가"** 를 묻고, 아니면 코드로. 이미 secret 에 있으면 `const CODE_X = [...]` 를 코드에 두고 env 는 **union 으로 더하기만** 가능하게 한다 — `env ?? DEFAULT` 는 env 가 여전히 **좁힐** 수 있어 같은 사고가 재발한다. 드리프트는 lint 로 잡는다(src 의 리터럴을 모아 선언 목록과 대조 = 결정론적).
 
 ## Storage
 - 버킷 정책을 `storage.objects`에 명시(public read / admin write 등). 공개 버킷에 PII 금지.
