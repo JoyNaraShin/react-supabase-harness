@@ -34,6 +34,18 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
    ```
    - RLS 정책의 함수/`auth.uid()` 는 **`(select ...)` 로 래핑**(행별 재평가 방지).
    - admin 판별은 `private.is_admin()`(security definer, search_path='') 패턴.
+   - **함수 인자를 바꾸려면 `drop` 후 `create`** — `create or replace` 는 인자 목록을 못 바꾼다.
+     다른 시그니처로 쓰면 **오버로드가 하나 더 생기고**, 무인자 호출이 "not unique" 로 터진다.
+     그리고 `drop` 은 **ACL 을 초기화**하므로 grant/revoke 를 반드시 다시 쓴다.
+   - **새 함수의 회수는 `from public, anon` 둘 다** — `revoke … from public` 만으로는 부족하다.
+     프로젝트 맨 앞 마이그에 `alter default privileges … on functions` 가 있으면 새 함수에
+     **anon 직접 GRANT** 가 따로 붙기 때문이다(`public` 회수로는 안 지워진다). 실측 2026-09-24:
+     `revoke … from public` 만 쓴 RPC 가 anon 실행 가능인 채 CI 를 빨갛게 만들었다.
+     ```sql
+     revoke all on function public.<name>(<인자타입…>) from public, anon;
+     grant execute on function public.<name>(<인자타입…>) to authenticated, service_role;
+     ```
+     검증은 `proacl` 문자열 패턴이 아니라 `has_function_privilege('anon', '<sig>', 'EXECUTE')` 로.
    - **표를 새로 만들면 Data API grant 경로 확인** — 맨 앞 마이그에 `alter default privileges in schema public … on tables` 가 없으면 이 마이그에 표별 `grant select, insert, update, delete on public.<name> to authenticated;`(+ `anon`/`service_role` 필요분) 을 같이 쓴다. 2026-10-30 부터 자동 grant 가 없어 안 쓰면 그 표만 조용히 403.
    - **UPDATE 정책은 `USING`(OLD)과 `WITH CHECK`(NEW)을 나란히 쓴다.** WITH CHECK 이 더
      약하면 사용자가 행의 **부모를 바꿔 옮길 수 있다**(재부모화). 그리고 두 식 어느 쪽도
@@ -54,7 +66,9 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
    - [ ] destructive(DROP·RENAME·ALTER COLUMN TYPE)면 별도 파일로 분리?
    - [ ] 상단 `-- rollback:` 주석 작성?
    - [ ] 표 생성 시 Data API grant 경로 확보(앞선 default privileges 또는 표별 grant)?
-   - [ ] 새 함수에 `revoke execute … from public`(기본이 PUBLIC 부여)?
+   - [ ] 새 함수에 `revoke all … from public, anon` + `grant execute … to authenticated`?
+         (PUBLIC 기본 부여 **와** default privileges 의 anon 직접 GRANT 둘 다 있다)
+   - [ ] 함수 인자를 바꿨으면 `create or replace` 가 아니라 `drop`+`create`, 그리고 ACL 재작성?
    - [ ] UPDATE 정책의 `WITH CHECK` 이 `USING` 만큼 강한가? 부모 id 컬럼이 있으면 재부모화 점검?
    - [ ] 가드 추가 시 **정상 경로 단언을 교차 트랜잭션으로** 썼나?
          (`set local session_replication_role = replica` 로 `updated_at` 을 과거로 민 뒤 UPDATE)
