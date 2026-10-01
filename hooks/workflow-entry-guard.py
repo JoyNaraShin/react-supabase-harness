@@ -2,7 +2,7 @@
 """PostToolUse hook — 하네스 워크플로우 미탑승 감지 시 규정을 주입한다.
 
 배경(2026-07-20 실측 사고): WORKFLOW.md·RULES.md 는 컨텍스트 상주가 아니고,
-REVIEW.md 는 review-protocol 훅이 "리뷰해줘" 어휘에만 반응해 주입한다. 그래서
+docs/REVIEW-PROTOCOL.md 는 review-protocol 훅이 "리뷰해줘" 어휘에만 반응해 주입한다. 그래서
 **구현 착수·신규 프로젝트 생성 경로에는 규정을 주입하는 장치가 전혀 없었다.**
 메인 세션이 하네스를 한 번도 읽지 않고 자체 플로우로 진행해도 아무도 막지 않았다.
 

@@ -85,7 +85,7 @@ cp hooks/_external/plugin-drift-check.sh ~/.claude/hooks/
 
 ## 전제 / 주의
 
-- **인프라는 운영 주체 계정으로** — 개발자는 키를 받아 셋업·배포만. 소유권·보안 책임 분리.
+- **인프라는 운영 주체 계정으로**(Supabase/Vercel/Cloudflare/Resend) — 개발자는 키를 받아 셋업·배포만. 소유권·보안 책임 분리.
 - 다른 머신에 플러그인을 얹을 땐 `gh`·`git`·`supabase`·`python3`(훅) 필요. biome 없는 레포에선 `format-on-edit` 훅이 no-op.
 - **무료 private repo**는 classic branch protection 불가 → `/new-project`는 best-effort(403 경고 후 계속). main 보호는 `block-destructive-git` 훅 + `/branch`·`/pr` 규약으로 대체.
 - sub-issue(`/issue --epic`)는 토큰 `repo` scope 필요 → `gh auth refresh -s repo`.

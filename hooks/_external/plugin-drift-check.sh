@@ -31,7 +31,7 @@ import json, os, subprocess
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
-SRC = HOME / "react-supabase-harness"
+SRC = Path(os.environ.get("HARNESS_SRC") or HOME / "react-supabase-harness")  # 소스 저장소 위치
 KEY = "react-supabase-harness@react-supabase"
 
 def sh(args, cwd):

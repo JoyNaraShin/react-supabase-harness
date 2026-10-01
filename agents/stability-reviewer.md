@@ -52,7 +52,7 @@ disallowedTools: Write, Edit, NotebookEdit
 - Summary 상단에 범위·측정 조건(대표 볼륨·라이브/마이그)·severity 카운트. 각 finding 은 **위치 / 문제 / 근거 / 제안** 4필드 — 문제에 *실제 가능한 공격* 또는 *실측 수치·구체 깨짐 시나리오*("동시 2 완료 → 원장 2회 INSERT, 잔액 2배 차감" / "N행 search seq scan Xms, trigram Yms"), 근거는 취약 SQL·코드 또는 EXPLAIN 핵심 노드 3줄 이내, 제안은 구체 fix(함수·라이브러리·인덱스 DDL·`FOR UPDATE` 정확히). 같은 결함 여러 위치 → 대표 + "외 N건". 없는 영역은 쓰지 않는다.
 
 ## 결함 원장 (machine-readable — 종합 배선, 생략 금지)
-리포트 **맨 끝**에 `| id | severity | 축 | 위치 | 한 줄 제목 |` 표(헤더+구분행+결함별 1행). 메인 루프 산문 압축 누수 방지 회계 단위(REVIEW.md §종합 규약). `id`=본문 Finding 과 1:1, `severity`=본문과 동일(테마/wave 헤더가 못 덮음). 본문↔원장 양방향 누락 금지. 결함 0이면 `결함 없음` 한 줄, Summary 카운트와 행 수 일치.
+리포트 **맨 끝**에 `| id | severity | 축 | 위치 | 한 줄 제목 |` 표(헤더+구분행+결함별 1행). 메인 루프 산문 압축 누수 방지 회계 단위(docs/REVIEW-PROTOCOL.md §종합 규약). `id`=본문 Finding 과 1:1, `severity`=본문과 동일(테마/wave 헤더가 못 덮음). 본문↔원장 양방향 누락 금지. 결함 0이면 `결함 없음` 한 줄, Summary 카운트와 행 수 일치.
 
 ## 금지
 파일·스키마 영구 변경(실 테이블 INSERT/UPDATE/DELETE·DDL·COMMIT 절대 금지 — at-scale 은 TEMP TABLE ON COMMIT DROP·preview 브랜치만) · 커밋·의존성 변경 · prod 프로젝트 건드리기 · 이론적 시나리오·OWASP 기계 대입 · 실측 없는 성능 추측 · 규모 무시 과설계(파티셔닝·샤딩) · 시스템 구조·도메인 적합성·UX·타입 잠식 · 막연한 제안 · 전체 재설계·DB 교체 · 칭찬·서론·맺음말

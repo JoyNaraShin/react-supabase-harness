@@ -64,6 +64,7 @@ INSTALL_CMD = re.compile(
 )
 IMPORT_SPEC = re.compile(r"""(?:from|require\(|import\()\s*['"]([^'"]+)['"]""")
 DEP_KEY = re.compile(r'"([^"]+)"\s*:\s*"[^"]*"')
+JS_SOURCE = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte", ".astro")
 
 
 def _pkg_name(spec: str) -> str:
@@ -120,6 +121,10 @@ def p_pkg_ref(ctx, a):
             if b:
                 return (True, b)
         return (False, "")
+    # import 구문은 JS 계열 소스에서만 의미가 있다. .py·.md 안의 예시 문자열은 도입이 아니다
+    # (2026-10-01 실측: 테스트 픽스처 문자열을 UI 라이브러리 도입으로 차단).
+    if not ctx["path"].lower().endswith(JS_SOURCE):
+        return (False, "")
     for m in IMPORT_SPEC.finditer(ctx["body"]):
         b = _pkg_hit(m.group(1), banned)
         if b:
@@ -160,7 +165,9 @@ def p_harness_target(ctx, a):
         except Exception:
             pass
     ok = (r / "docs" / "plans").is_dir() or (r / "docs" / "RULES.md").is_file() or (r / "supabase").is_dir()
-    return (ok, str(r.name))
+    # 매치 문자열을 내지 않는다 — 관할 여부는 '무엇이 걸렸나'가 아니라 전제 조건이다.
+    # (프로젝트 폴더명을 내면 plan-first 차단 메시지에 파일 경로 대신 폴더명이 찍힌다.)
+    return (ok, "")
 
 
 def p_escape_hatch(ctx, a):
@@ -296,7 +303,9 @@ def evaluate(rule: dict, ctx: dict):
             return None  # fail-open
         if ok != (not neg):
             return None
-        if m and not matched:
+        # 부정 조건의 반환값(예: 꺼져 있는 탈출구 이름)은 '무엇이 걸렸나'가 아니다.
+        # 2026-10-01 실측: no-ui-library 차단 메시지에 패키지명 대신 `ui-lib-gate-off` 가 찍혔다.
+        if m and not neg and not matched:
             matched = m
     return matched or "match"
 
