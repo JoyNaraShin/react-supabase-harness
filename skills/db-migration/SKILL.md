@@ -77,7 +77,7 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      가 같이 담긴다. 실측 사고 2026-09-17: 그대로 푸시돼 수습이 **토큰 무효화 + force-push**
      였다 — 푸시된 뒤에는 파일을 지우는 것만으로 끝나지 않는다.
      🔴 **절차 문서에 주의를 적는 것으로 끝내지 말 것.** 사람이 기억해서 붙이는 플래그는
-     언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(실프로젝트 `scripts/lint-sql-dump-scope.mjs`:
+     언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(예: `scripts/lint-sql-dump-scope.mjs` —
      추적 대상 `*.sql` 에서 pg_dump 의 `Schema: <public 아님>` 헤더 · auth/storage/vault 로
      들어가는 COPY·INSERT · 토큰·암호 컬럼 이름을 잡는다. 마이그레이션·pgTAP 경로는 제외하되
      시크릿 컬럼 검사만은 전수).

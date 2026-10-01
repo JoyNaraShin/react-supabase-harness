@@ -1,15 +1,15 @@
 {
-  "name": "nara-stack",
+  "name": "react-supabase",
   "owner": {
     "name": "Nara Shin",
     "email": "joyshin93@gmail.com"
   },
   "plugins": [
     {
-      "name": "nara-stack-harness",
+      "name": "react-supabase-harness",
       "source": "./",
-      "description": "1인 풀스택 개발 하네스 — 프로젝트 부트스트랩·이슈 플로우 스킬·리뷰 서브에이전트·안전/자동화 훅. React + Vite + Supabase.",
-      "version": "0.20.0"
+      "description": "Claude Code 개발 워크플로 하네스 — 플랜 우선 코딩, 적대 리뷰 에이전트와 무손실 종합, 결정론적 게이트 훅. React + Vite + Supabase.",
+      "version": "0.30.0"
     }
   ]
 }

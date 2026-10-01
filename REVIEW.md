@@ -1,4 +1,4 @@
-# Review instructions — nara-stack-harness (Claude Code 플러그인 하네스)
+# Review instructions — react-supabase-harness (Claude Code 플러그인 하네스)
 
 이 레포는 앱 소스가 아니라 **Claude Code 플러그인**이다: `skills/<name>/SKILL.md`(마크다운+frontmatter), `agents/*.md`, `hooks/*.py` + `hooks/hooks.json`, `docs/*.md`, `.claude-plugin/{plugin,marketplace}.json`. 리뷰는 "플러그인이 의도대로·안전하게 동작하는가"에 맞춘다.
 

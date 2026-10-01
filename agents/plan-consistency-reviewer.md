@@ -53,7 +53,7 @@ tools: Read, Grep, Glob, SendMessage
 Finding 제목엔 안정 ID(P1, P2, ...)를 붙인다. findings 없으면 `## Findings\n없음`. 칭찬·서론·맺음말 없음.
 
 ## 결함 원장 (machine-readable — 종합 배선, 생략 금지)
-리포트 **맨 끝**에 `| id | severity | 축 | 위치 | 한 줄 제목 |` 표(헤더+구분행+결함별 1행). `id`=본문 Finding 과 1:1(P1, P2, ...), `severity`=본문과 동일. 결함 0이면 `결함 없음` 한 줄. 종합 시 `scripts/synthesize.py` 보존 검사가 이 원장을 대조한다(REVIEW.md §종합 규약 rule 1 — 모든 리뷰어가 emit).
+리포트 **맨 끝**에 `| id | severity | 축 | 위치 | 한 줄 제목 |` 표(헤더+구분행+결함별 1행). `id`=본문 Finding 과 1:1(P1, P2, ...), `severity`=본문과 동일. 결함 0이면 `결함 없음` 한 줄. 종합 시 `scripts/synthesize.py` 보존 검사가 이 원장을 대조한다(docs/REVIEW-PROTOCOL.md §종합 규약 rule 1 — 모든 리뷰어가 emit).
 
 ## 금지
 - 파일 수정·커밋 · 설계 판단(architect 영역 잠식) · 추측 지적 · 빈 항목 억지 · 칭찬·총평

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """리뷰 종합 규약 집행기 — 결함 원장 회계 (표준 라이브러리 전용).
 
-REVIEW.md §종합 규약의 기계 패스. 메인 루프의 산문 압축 편향이 종합 단계에서
+docs/REVIEW-PROTOCOL.md §종합 규약의 기계 패스. 메인 루프의 산문 압축 편향이 종합 단계에서
 항목을 떨어뜨리거나 severity 를 강등하는 누수를, 루프가 아니라 회계로 막는다.
 
 각 리뷰어 리포트(.md)는 맨 끝에 machine-readable 결함 원장을 emit 한다
@@ -118,7 +118,7 @@ def parse_ledger(path, warnings, valid_empty=None):
     if heading_idx is None:
         warnings.append(
             f"  [원장 없음] {path} — '결함 원장' 헤딩을 못 찾음. "
-            f"이 리뷰어는 REVIEW.md §종합 규약 rule 1(원장 emit)을 위반. "
+            f"이 리뷰어는 docs/REVIEW-PROTOCOL.md §종합 규약 rule 1(원장 emit)을 위반. "
             f"fallback 파싱 시도 중..."
         )
         return _fallback_parse(agent, lines, warnings, path)

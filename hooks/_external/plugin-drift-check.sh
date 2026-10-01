@@ -31,8 +31,8 @@ import json, os, subprocess
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
-SRC = HOME / "Projects" / "nara-stack-harness"
-KEY = "nara-stack-harness@nara-stack"
+SRC = Path(os.environ.get("HARNESS_SRC") or HOME / "Projects" / "react-supabase-harness")  # 소스 저장소 위치
+KEY = "react-supabase-harness@react-supabase"
 
 def sh(args, cwd):
     try:
@@ -79,7 +79,7 @@ except Exception:
     pass
 
 if inst is None:
-    problems.append(("CRIT", "설치본을 찾을 수 없다", "/plugin install nara-stack-harness"))
+    problems.append(("CRIT", "설치본을 찾을 수 없다", "/plugin install react-supabase-harness"))
 elif not (inst / "hooks").is_dir():
     problems.append(("CRIT",
         f"설치본({inst.name})에 hooks/ 가 없다 — 강제 장치 {len(expected)}개가 0개 가동",
@@ -103,12 +103,12 @@ if unpushed:
 #     캐시가 푸시보다 오래되면 새 버전의 존재 자체를 모른다. update 전에 갱신이 필요하다.
 try:
     km = json.loads((HOME / ".claude/plugins/known_marketplaces.json").read_text())
-    last = km["nara-stack"]["lastUpdated"][:10]
+    last = km["react-supabase"]["lastUpdated"][:10]
     head_date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], SRC)
     if head_date and last < head_date:
         problems.append(("CRIT",
             f"마켓플레이스 캐시가 낡음 (갱신 {last} < 소스 최신 커밋 {head_date})",
-            "claude plugin marketplace update nara-stack   ← plugin update 보다 먼저"))
+            "claude plugin marketplace update react-supabase   ← plugin update 보다 먼저"))
 except Exception:
     pass
 
@@ -118,7 +118,7 @@ try:
     cache_ver = ins["plugins"][KEY][0]["version"]
     if src_ver and cache_ver != src_ver:
         problems.append(("WARN", f"버전 드리프트 설치본 v{cache_ver} != 소스 v{src_ver}",
-                         "claude plugin update nara-stack-harness@nara-stack (전체 id 필요·재시작 후 적용)"))
+                         "claude plugin update react-supabase-harness@react-supabase (전체 id 필요·재시작 후 적용)"))
 except Exception:
     pass
 

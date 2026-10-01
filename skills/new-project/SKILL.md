@@ -1,6 +1,6 @@
 ---
 name: new-project
-description: 신규 클라이언트 프로젝트 day-1 부트스트랩 — gh repo create + 3축 라벨 + Phase 마일스톤 + squash-merge 강제 + 초기커밋(/commit 위임). 전부 멱등.
+description: 신규 프로젝트 day-1 부트스트랩 — gh repo create + 3축 라벨 + Phase 마일스톤 + squash-merge 강제 + 초기커밋(/commit 위임). 전부 멱등.
 disable-model-invocation: true
 allowed-tools: Bash(gh *), Bash(git *), Bash(jq *)
 argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo]

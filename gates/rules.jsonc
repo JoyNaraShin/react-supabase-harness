@@ -20,7 +20,7 @@
   "rules": [
     {
       "id": "no-ui-library",
-      // 하드룰 「외부 UI 라이브러리 금지」
+      // RULES §8 「외부 UI 컴포넌트 라이브러리 금지」
       "on": ["Write", "Edit", "Bash"],
       "when": [
         { "not": true, "escapeHatch": "ui-lib-gate-off" },
@@ -40,12 +40,12 @@
       ],
       "action": "deny",
       "off": "ui-lib-gate-off",
-      "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — 하드룰 「외부 UI 라이브러리 금지」.\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
+      "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 「외부 UI 컴포넌트 라이브러리 금지」.\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
     },
 
     {
       "id": "plan-first",
-      // 하드룰 「디자인·스키마 퍼스트 — 코드 먼저 금지」
+      // RULES §1 「Plan vs Execute — 코드 먼저 금지」
       // 소규모 편집(20줄·800자 이하)은 통과 — RULES §1 "한 문장 diff" 예외의 기계적 정의.
       "on": ["Write", "Edit"],
       "when": [
@@ -60,7 +60,7 @@
       ],
       "action": "deny",
       "off": "plan-gate-off",
-      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — 하드룰 「디자인·스키마 퍼스트, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다.\n\n할 것 — 둘 중 하나:\n  ① `/phase` 로 슬라이스 플랜을 먼저 쓴다 (정석)\n  ② 정말 한 문장 diff 면 편집을 잘게 쪼갠다 (20줄·800자 이하는 통과)"
+      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다.\n\n할 것 — 둘 중 하나:\n  ① `/phase` 로 슬라이스 플랜을 먼저 쓴다 (정석)\n  ② 정말 한 문장 diff 면 편집을 잘게 쪼갠다 (20줄·800자 이하는 통과)"
     }
   ]
 }
