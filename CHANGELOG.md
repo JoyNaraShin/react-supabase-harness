@@ -2,6 +2,29 @@
 
 이전 버전의 변경 내역은 git 이력에 있다. 이 파일은 공개 이후부터 기록한다.
 
+## 0.33.0 — 결과 기반 센서
+
+v0.32.0 「알려진 한계」의 우회들을 명령 표기를 더 조이는 대신 **결과**로 닫았다. 어떤 표기로 했든 결과는 같다.
+
+### 안전망
+- `snapshot-guard`(PreToolUse·Bash) — 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리(미추적 포함·gitignore 제외)를 `refs/harness/snapshots/` 에 남긴다. 실제 인덱스를 임시 파일로 복사해 바뀐 파일만 해시하고, 같은 트리면 재사용, 최근 30개 보존. 파일 1,300개 레포에서 250–450ms. 파괴 계열 명령이면 파일 단위 복구 명령을 알린다. 저장소는 하위 명령마다 `cd` 를 따라 정하고, 프로젝트의 저장소(모노레포 상위 루트 포함)와 프로젝트 안 저장소에만 ref 를 쓴다(홈 디렉터리 dotfiles 저장소 등에는 쓰지 않는다 — 실세션 eval trace 에서 발견). Claude Code 체크포인트는 Bash 변경을 추적하지 않는다(공식 문서).
+- `hooks/git/pre-push` + `scripts/install-git-hooks.sh` — 기본 브랜치의 non-fast-forward 갱신, 원격 ref 삭제, `refs/harness/*` 전송을 git 이 보낼 ref 갱신으로 판정해 막는다. 기능 브랜치의 rebase 후 갱신은 통과. 기존 pre-push 는 `pre-push.local` 로 보존해 먼저 실행. `block-destructive-git` 은 `push --no-verify`·`-c core.hooksPath=…` 를 막는다.
+
+### 룰 술어
+- `plan-first` — Bash 의 쓰기 대상(heredoc·리다이렉트·`cp`·`sed -i`, `cd` 추적)에도 같은 판정. 셸로 만든 새 코드 파일과 큰 heredoc 덮어쓰기가 대상이고, 작은 in-place 편집·삭제·프로젝트 밖 쓰기는 통과.
+- `no-ui-library` — 별칭 스펙(`<이름>@npm:<패키지>`), 레지스트리 tarball URL·파일, `npm pkg set dependencies.<패키지>=`, `package.json` 값의 `npm:` 별칭, side-effect import, CSS·SCSS `@import`/`@use`. 그리고 룰의 새 필드 `after` 로 **Bash 실행 뒤 `package.json` 에 새로 들어온 금지 의존성**(HEAD 대비)을 결과로 잡는다 — 이미 커밋된 의존성은 다시 알리지 않는다.
+
+### 서브에이전트
+- `subagent-audit`(SubagentStart·SubagentStop) — 시작 스냅샷과 끝 트리를 비교해 코드 영역이 바뀌었으면(포매터·생성기·설치 포함) 한 번 세워 최종 보고 맨 앞에 목록과 스냅샷을 싣게 한다. 되돌리지 않는다(같은 시간의 사용자 편집일 수 있다). `delegation.writers` 타입은 제외.
+- 판정 기록 — 하네스 verifier·리뷰어의 PASS/FAIL·VERDICT·Critical 수를 훅이 `.claude/state/verdicts.jsonl` 에 적는다(에이전트 쓰기는 gate-engine 이 막는다). 승인 커밋은 지금 HEAD 위의 마지막 verify 가 FAIL 이면 막힌다.
+- `session-start-summary` — `permissions.ask` 에 `Bash(git commit *)` 가 없으면 알린다. BOOTSTRAP 2단계에 ask 규칙과 pre-push 설치를 넣었다(둘 다 사용자가 켠다).
+
+### 측정
+- 계약 테스트 125 → 143, 뮤턴트 23 → 32(전부 죽음). pre-push 는 bare 원격으로 실제 push 해 검증한다.
+
+### 남긴 것
+- 목록 밖 UI 라이브러리, git 이 아닌 프로젝트의 결과 검사, 스크립트·인터프리터 안 쓰기의 plan-first, 백그라운드 서브에이전트와 메인의 동시 변경 구분, 판정 품질, gitignore 대상 파일의 스냅샷(README 「알려진 한계」).
+
 ## 0.32.0 — 측정과 정본 정합
 
 세 갈래 독립 리뷰(신규 사용자 · 정본 대조 · 적대적 우회)를 기준으로 고치고, 하네스가 모델 단독 대비 무엇을 더하는지 처음으로 측정했다.

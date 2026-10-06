@@ -11,7 +11,7 @@ Claude Code 플러그인이다. 플러그인을 설치한 **다른 프로젝트*
 
 | 경로 | 무엇 | 종류 |
 |---|---|---|
-| `hooks/` | 훅 14개(Python·bash). `hooks.json` 이 이벤트와 매처를 등록한다. `shellparse.py` 는 두 훅이 쓰는 셸 쓰기 대상 파서 | 센서 · 계산형 |
+| `hooks/` | 훅 16개(Python·bash). `hooks.json` 이 이벤트와 매처를 등록한다. 공용 모듈: `shellparse.py`(셸 쓰기 대상 파서), `gitsnap.py`(작업 트리 스냅샷). `git/pre-push` 는 사용자가 설치하는 git 훅 | 센서 · 계산형 |
 | `hooks/gate-engine.py` + `gates/rules.jsonc` | 룰은 데이터, 집행자는 엔진 하나. 새 룰은 jsonc 덩어리 하나 | 센서 · 계산형 |
 | `agents/` | 리뷰어 4 · planner · verifier | 센서 · 추론형(verifier 만 계산형) |
 | `skills/` | 사용자 호출 전용 스킬 16개(`disable-model-invocation: true`) | 가이드 |

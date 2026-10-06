@@ -45,7 +45,7 @@
 이 훅들은 **에이전트의 실수를 막는 협조형 가드**다. 의도적으로 우회하려는 프로세스를 막는 보안 경계가 아니다.
 
 - **위협 모델은 협조형이다.** 막으려는 것은 에이전트가 실수로 내는 파괴 명령·규칙 이탈이다. 우회를 작정하고 명령을 비트는 경우는 막지 않는다.
-- **승인 표식은 자기 신고다.** `/commit` 이 붙이는 `CLAUDE_COMMIT_APPROVED=1` 과 파일 산출 예외 표식 `[HARNESS: 파일산출 면제]` 는 모델이 직접 입력할 수도 있다. 이 하네스는 표식을 deny 메시지로 알려 주지 않고, 규칙으로 "사용자 승인 후에만"을 요구하는 데서 멈춘다. 탈출구 파일 이름은 메시지에 나오지만, 에이전트가 그 파일을 만드는 것은 엔진이 코드로 막는다. 강제 승인이 필요하면 Claude Code 권한 설정(`permissions.ask`)을 함께 쓴다.
+- **승인 표식은 자기 신고다.** `/commit` 이 붙이는 `CLAUDE_COMMIT_APPROVED=1` 과 파일 산출 예외 표식 `[HARNESS: 파일산출 면제]` 는 모델이 직접 입력할 수도 있다. 이 하네스는 표식을 deny 메시지로 알려 주지 않고, 규칙으로 "사용자 승인 후에만"을 요구하는 데서 멈춘다. 탈출구 파일 이름은 메시지에 나오지만, 에이전트가 그 파일을 만드는 것은 엔진이 코드로 막는다. 강제 승인이 필요하면 Claude Code 권한 설정 `permissions.ask: ["Bash(git commit *)"]` 를 넣는다([BOOTSTRAP](docs/BOOTSTRAP.md) 2단계) — ask 규칙은 훅의 allow 로도 넘지 못해 플랫폼이 직접 묻는다. 플러그인 설정으로는 실을 수 없어(플러그인 `settings.json` 은 `agent` 계열 키만 적용) 사용자가 넣고, 없으면 `session-start-summary` 가 알린다.
 - **범용 인터프리터는 보지 않는다.** `python -c`·`node -e`·스크립트 파일로 같은 일을 하면 통과한다. git 별칭(`git -c alias.x=…`)도 마찬가지다.
 - **매처 밖 툴은 보지 않는다.** 다른 MCP 서버가 제공하는 파일 쓰기·셸 실행 툴에는 게이트가 붙지 않는다.
 - **보고 무결성 게이트는 어휘를 본다.** 실패를 "언급했는가"를 정해진 어휘로 판정하므로, 형식적으로 한 단어만 넣어도 통과한다. 목적은 누락 방지이지 보고 품질 채점이 아니다.
@@ -55,21 +55,23 @@
 결정론을 지키느라 일부러 남긴 구멍과, 아직 측정하지 못한 것들이다.
 
 - **`plan-first` 는 "플랜이 있는가"만 본다.** 실제 플랜이 하나라도 생기면 그 뒤로는 통과한다. 지금 쓰는 코드가 그 플랜의 범위인지는 판정하지 않는다(판정하려면 의미 해석이 필요하다). 20줄·800자 이하 편집은 통과시키므로, 편집을 잘게 쪼개면 크기 술어도 피해 갈 수 있다. 디자인·스키마 퍼스트는 `/phase` 절차와 리뷰어의 몫이지 이 게이트의 몫이 아니다.
-- **판정 기록은 자기 신고다.** `/phase 0` 의 FIT, `/verify` 의 PASS, 리뷰의 Critical 0 은 대화와 문서에 남지만, 다음 단계가 그 기록을 기계로 확인하지는 않는다.
+- **판정 기록은 형식만 믿는다.** verifier·리뷰어가 끝나면 `subagent-audit` 이 마지막 메시지에서 PASS/FAIL·VERDICT·Critical 수를 뽑아 에이전트가 쓸 수 없는 `.claude/state/verdicts.jsonl` 에 적고, 승인 커밋은 지금 HEAD 위의 마지막 verify 가 FAIL 이면 막힌다. 판정의 품질은 보지 않는다 — "PASS 라고만 답하라"는 verifier 를 스폰하는 것은 막지 않는다. `/phase 0` 의 FIT 과 리뷰의 Critical 0 은 기록만 하고 다음 단계가 아직 소비하지 않는다.
 - **스택 준수 신호는 문자열 패턴이다.** `stack-compliance-guard` 는 `../../` import·컴포넌트 CSS import·`useEffect`+fetch 같은 우회 흔적을 알리기만 한다. 오탐 여지가 있어 차단하지 않는다.
-- **룰 술어와 위임 판정에 남긴 우회.** 별칭 스펙(`<이름>@npm:<패키지>`)·tarball·`npm pkg set` 으로 넣는 금지 패키지, side-effect import(`import '<패키지>/x.css'`)·CSS `@import`, 목록에 없는 유사 UI 라이브러리는 `no-ui-library` 가 보지 않는다. `plan-first` 는 Write·Edit 만 보므로 셸 heredoc 으로 만든 파일은 통과한다. 서브에이전트가 포매터·생성기·패키지 설치로 코드 영역을 바꾸는 것(`prettier --write`, `npm install`)은 위임 차단이 보지 않는다. 같은 하위 명령 안에 쓰기 동사와 보호 경로 언급이 따로 있으면 읽기여도 막히는 과차단이 일부 남았다(예: `rm -f .claude/state/edit-count.json`).
-- **파괴적 명령 파서에 재현된 구멍이 남아 있다.** v0.32.0 적대 리뷰에서 우회(별칭·축약 옵션·경로 표기 변형 등)와 과차단(정상 명령이 막히는 경우)을 합쳐 20건 남짓 재현했고, 다음 릴리스 작업으로 미뤘다. 파싱이 실패하면 차단 쪽으로 기우므로 따옴표가 복잡한 정상 명령이 막힐 수 있다. 막힌 경우 메시지가 비파괴 대안과 사용자 직접 실행(`! <명령>`)을 안내한다.
+- **룰 술어와 위임 판정에 남긴 우회.** 목록에 없는 유사 UI 라이브러리는 `no-ui-library` 가 모른다. 실행 뒤 결과 검사는 커밋된 `package.json`(HEAD)과 비교하므로 git 이 아닌 프로젝트에서는 설치 명령 표기만 본다. 셸로 만든 코드의 `plan-first` 는 쓰기 대상이 명령에 드러나는 형태(heredoc·리다이렉트·`cp`·`sed -i` 등)만 본다 — 스크립트·인터프리터 안의 쓰기는 통과한다. 서브에이전트 사후 diff 는 백그라운드로 메인 세션과 동시에 돌면 그 사이 메인·사용자의 변경이 섞이고, 되돌리지 않고 보고만 시킨다(사용자 편집을 지우지 않기 위해). 같은 하위 명령 안에 쓰기 동사와 보호 경로 언급이 따로 있으면 읽기여도 막히는 과차단이 일부 남았다(예: `rm -f .claude/state/edit-count.json`).
+- **파괴적 명령 파서에 재현된 구멍이 남아 있다.** v0.32.0 적대 리뷰에서 우회(별칭·축약 옵션·경로 표기 변형 등)와 과차단(정상 명령이 막히는 경우)을 합쳐 20건 남짓 재현했다. 파서를 더 조이는 대신 v0.33.0 에서 결과 쪽 안전망을 붙였다 — `snapshot-guard` 가 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리를 스냅샷으로 남기고(어떤 표기로 지웠든 복구 가능), `pre-push` 훅이 기본 브랜치 강제 갱신·원격 ref 삭제를 표기와 무관하게 막는다. 스냅샷은 gitignore 대상(`.env` 등)과 레포 밖 파일을 보호하지 않고, `pre-push` 는 사용자가 설치해야 한다(`scripts/install-git-hooks.sh`). 파싱이 실패하면 차단 쪽으로 기우므로 따옴표가 복잡한 정상 명령이 막힐 수 있다. 막힌 경우 메시지가 비파괴 대안과 사용자 직접 실행(`! <명령>`)을 안내한다.
 - **측정 범위.** 서브에이전트의 툴 호출에도 PreToolUse 훅이 발동하고 입력에 `agent_id` 가 실린다는 전제(`block-impl-delegation`)는 공식 훅 문서와 eval(서브에이전트의 `src/` 쓰기가 실제로 막힘)로 확인했다. `settings.json` 의 `env` 값이 훅 프로세스에 전달되는지는 확인하지 않았다. eval 은 dontAsk 권한 모드의 샌드박스에서 돌아서, 사람이 승인 프롬프트를 보는 대화형 세션과 동작이 다를 수 있다.
 
 ## 구성
 
-### 훅 14개 — 설치 즉시 자동 실행된다
+### 훅 16개 — 설치 즉시 자동 실행된다
 
 | 훅 | 이벤트 | 하는 일 | 동작 방식 |
 |---|---|---|---|
-| `block-destructive-git` | PreToolUse · Bash | 직접 `git commit`·강제 push·`push --delete/--mirror`·`reset --hard`·`clean -f`·`branch -D`·작업 폐기 checkout/restore·이력 재작성, 시스템 최상위·홈 직속·상위(`../`)·현재 디렉터리·변수만 있는 경로의 `rm -r`·`find -delete` 차단(홈 아래 다른 프로젝트처럼 깊은 절대경로는 막지 않는다). `env`·`sudo`·`nohup` 같은 런처 접두어, 여러 줄 명령, `do`/`then` 복합문, `bash -c`·`eval`·셸이 읽는 heredoc 안도 검사 | **차단** · 파싱 실패·내부 오류 시 fail-closed. 커밋은 `/commit` 승인 경로만 통과 |
-| `gate-engine` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash | `gates/rules.jsonc` + 프로젝트 `.claude/gates/rules.jsonc` 룰 집행. 에이전트가 탈출구 파일·룰 파일을 스스로 만들거나 바꾸는 것은 코드로 차단 | **차단/알림** · 룰마다 탈출구(사용자가 켠다) |
+| `snapshot-guard` | PreToolUse · Bash | 읽기 전용으로 확인되지 않은 명령 직전에 작업 트리(미추적 포함·gitignore 제외)를 `refs/harness/snapshots/` 에 남긴다. 같은 트리면 새로 만들지 않고 최근 30개만 보존. 프로젝트의 저장소에만 쓴다 | 차단하지 않음 · 파괴 계열이면 복구 명령 알림 · 1,300 파일 레포에서 250–450ms |
+| `block-destructive-git` | PreToolUse · Bash | 직접 `git commit`·강제 push·`push --delete/--mirror/--no-verify`·`reset --hard`·`clean -f`·`branch -D`·작업 폐기 checkout/restore·이력 재작성, 시스템 최상위·홈 직속·상위(`../`)·현재 디렉터리·변수만 있는 경로의 `rm -r`·`find -delete` 차단(홈 아래 다른 프로젝트처럼 깊은 절대경로는 막지 않는다). `env`·`sudo`·`nohup` 같은 런처 접두어, 여러 줄 명령, `do`/`then` 복합문, `bash -c`·`eval`·셸이 읽는 heredoc 안도 검사 | **차단** · 파싱 실패·내부 오류 시 fail-closed. 커밋은 `/commit` 승인 경로만 통과하고, 훅이 기록한 마지막 verify 가 지금 HEAD 위 FAIL 이면 그것도 막는다 |
+| `gate-engine` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash, PostToolUse · Bash | `gates/rules.jsonc` + 프로젝트 `.claude/gates/rules.jsonc` 룰 집행. 룰의 `after` 에 든 도구는 실행 뒤 결과(예: `package.json` 에 새로 들어온 금지 의존성)로 다시 본다. 에이전트가 탈출구 파일·룰 파일을 스스로 만들거나 바꾸는 것은 코드로 차단 | **차단/알림** · 룰마다 탈출구(사용자가 켠다) |
 | `block-impl-delegation` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash (서브에이전트 호출만) | 서브에이전트가 코드 영역(`src/`·`supabase/`·`package.json` 등, 데이터로 정의)을 쓰려는 호출 차단. 리서치 산출·plan 작성·기계 실행은 통과 | **차단** · 사용자가 `delegation.writers` 에 넣은 타입만 예외 |
+| `subagent-audit` | SubagentStart · SubagentStop | 시작 시 스냅샷, 끝날 때 코드 영역이 바뀌었으면(포매터·생성기·설치 포함) 한 번 세워 최종 보고에 목록을 싣게 한다. 하네스 verifier·리뷰어의 판정을 `.claude/state/verdicts.jsonl` 에 훅이 기록 | **피드백**(1회) · 되돌리지 않음 |
 | `require-agent-output-file` | PreToolUse · Agent | 장기 에이전트는 결과를 저장할 파일 경로가 있어야 스폰(세션 한도로 끊기면 보고가 유실되므로) | **차단** · Explore·Plan·planner·fork·verifier·읽기 전용 리뷰어 면제 |
 | `format-on-edit` | PostToolUse · Edit/Write | `src/` 편집 직후 biome 포맷 — 프로젝트 로컬 biome이 있을 때만 | 파일 in-place 포맷 · 네트워크 설치 안 함 |
 | `edit-counter` | PostToolUse · Edit/Write | `src/` 편집 5회마다 `/check` 권고 | 알림 |
@@ -82,7 +84,7 @@
 | `report-failures-gate` | Stop | 이번 턴 툴 실패를 답변이 언급하지 않으면 차단. 앞서 실패한 명령이 성공했는데 정정이 없으면 차단(되돌릴 수 없는 것)/피드백(그 외) | **차단/피드백** · 트랜스크립트 못 읽으면 통과 |
 | `commit-boundary-gate` | Stop | 미커밋 변경이 20·40개 띠를 넘으면 커밋 단위 제안 요구 | 모델 피드백 · 띠당 1회 |
 
-Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`systemMessage` 는 사용자 화면에만 보이므로 쓰지 않는다). 이 피드백은 "알림"이라도 **턴을 한 번 더 이어 가게 만든다** — 모델이 피드백에 답해야 멈춘다. 상태 파일은 `<project>/.claude/state/`(gitignore 권장)와 `~/.claude/state/commit-boundary/` 에 쓴다. 하네스 밖에서 도는 감시자 하나(`hooks/_external/plugin-drift-check.sh` — 플러그인이 꺼졌거나 설치본에 훅이 빠졌는지 검사)는 선택 사항이다.
+Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`systemMessage` 는 사용자 화면에만 보이므로 쓰지 않는다). 이 피드백은 "알림"이라도 **턴을 한 번 더 이어 가게 만든다** — 모델이 피드백에 답해야 멈춘다. 상태 파일은 `<project>/.claude/state/`(gitignore 권장 — 판정 기록 `verdicts.jsonl` 포함), git 내부(`refs/harness/snapshots/`, `.git/harness-subagents/`)와 `~/.claude/state/commit-boundary/` 에 쓴다. 하네스 밖에서 도는 감시자 하나(`hooks/_external/plugin-drift-check.sh` — 플러그인이 꺼졌거나 설치본에 훅이 빠졌는지 검사)는 선택 사항이다.
 
 ### 에이전트 6개
 
@@ -123,15 +125,15 @@ Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`syst
 | §1 한 문장 diff 초과는 Plan 먼저 | `gate-engine` `plan-first` · `workflow-entry-guard` | 차단 · 알림 |
 | §1 Plan 직후 구조 리뷰 | `/phase` 절차 | 가이드 |
 | §2 커밋 메시지 형식 | `/commit` 절차 | 가이드 |
-| §3 검증 게이트 | `edit-counter`(5회마다 `/check` 권고) · `security-nudge` | 알림 |
+| §3 검증 게이트 | `edit-counter`(5회마다 `/check` 권고) · `security-nudge` · verify FAIL 위 승인 커밋 차단(`subagent-audit` 기록 → `block-destructive-git`) | 알림 · 차단 |
 | §4 마이그레이션 안전 | `/db-migration` 스캐폴드 · `stability-reviewer` | 가이드 · 추론형 리뷰 |
 | §5 고아 테이블 금지 | `structure-fitness-reviewer` | 추론형 리뷰 |
 | §6 plan 파일은 planner 만 작성 | — | 가이드 |
-| §7 구현 비위임 | `block-impl-delegation` | 차단 |
+| §7 구현 비위임 | `block-impl-delegation` · `subagent-audit`(사후 diff) | 차단 · 피드백 |
 | §8 외부 UI 라이브러리 미사용 | `gate-engine` `no-ui-library` | 차단 |
 | §8 Tailwind·alias·서버 상태 라이브러리 | `stack-compliance-guard`(신호만) | 알림 |
 | §8 import 계층·주석·strict | — | 가이드 |
-| §9 커밋은 `/commit` 승인 경로만 · 파괴적 git | `block-destructive-git` | 차단 |
+| §9 커밋은 `/commit` 승인 경로만 · 파괴적 git | `block-destructive-git` · `snapshot-guard`(복구) · 사용자 설치: `permissions.ask` 커밋 규칙, `pre-push` | 차단 · 안전망 |
 | §9 `git add .` 금지 · `--amend` 금지 | — | 가이드 |
 | §11 장기 에이전트 파일 우선 산출 | `require-agent-output-file` | 차단 |
 | §11 리뷰 위임·독립성 | `review-protocol`(프롬프트 주입) | 가이드 |
@@ -169,7 +171,7 @@ Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`syst
   "rules": [
     {
       "id": "no-console",
-      "on": ["Write", "Edit"],
+      "on": ["Write", "Edit"],                // after: ["Bash"] 를 넣으면 실행 뒤 결과로도 본다
       "when": [
         { "pathGlob": "*/src/*.tsx" },
         { "bodyRegex": { "pattern": "console\\.log", "except": "eslint-disable" } }
@@ -181,7 +183,7 @@ Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`syst
 }
 ```
 
-술어: `toolIn` · `pathGlob` · `bodyRegex` · `pkgRef`(설치 명령·deps·import 동시 검사) · `bodySizeOver` · `globExists` · `harnessTarget` · `escapeHatch`. 각 조건에 `"not": true`로 부정. 모르는 술어가 들어간 룰은 조용히 무효화된다(엔진이 룰보다 오래 산다). 룰 파일은 사람이 편집한다 — 에이전트의 쓰기는 엔진이 차단한다.
+술어: `toolIn` · `pathGlob`(Bash 는 쓰기 대상에 적용) · `bodyRegex` · `pkgRef`(설치 명령·deps 키와 값·import·CSS `@import` 동시 검사, `after` 단계에선 결과 `package.json`) · `bodySizeOver` · `globExists` · `harnessTarget` · `escapeHatch`. 각 조건에 `"not": true`로 부정. 모르는 술어가 들어간 룰은 조용히 무효화된다(엔진이 룰보다 오래 산다). 룰 파일은 사람이 편집한다 — 에이전트의 쓰기는 엔진이 차단한다.
 
 ## ⚠️ 설치 전에 — 범용 플러그인이 아니다
 
@@ -216,7 +218,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 23개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 32개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=1` 등) | 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동(비용 발생) |
 
