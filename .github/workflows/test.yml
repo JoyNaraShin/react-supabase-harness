@@ -23,30 +23,5 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: unit tests
         run: python -m unittest discover -s tests -v
-      - name: hooks.json references existing files
-        run: |
-          python - <<'PY'
-          import json, pathlib, re, sys
-          root = pathlib.Path(".")
-          hj = json.loads((root / "hooks/hooks.json").read_text())
-          missing = []
-          for groups in hj["hooks"].values():
-              for g in groups:
-                  for h in g["hooks"]:
-                      for m in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?)[\"' ]", h["command"] + " "):
-                          if not (root / m).exists():
-                              missing.append(m)
-          print("missing:", missing)
-          sys.exit(1 if missing else 0)
-          PY
-      - name: plugin manifests are valid JSON with matching versions
-        run: |
-          python - <<'PY'
-          import json, sys
-          p = json.load(open(".claude-plugin/plugin.json"))
-          m = json.load(open(".claude-plugin/marketplace.json"))
-          v = {x["name"]: x.get("version") for x in m["plugins"]}
-          ok = v.get(p["name"]) == p["version"]
-          print(p["name"], p["version"], "marketplace:", v.get(p["name"]))
-          sys.exit(0 if ok else 1)
-          PY
+      - name: doctor (참조·버전·스킬 규격·eval 구조)
+        run: python scripts/doctor.py
