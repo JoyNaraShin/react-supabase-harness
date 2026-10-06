@@ -1,0 +1,49 @@
+#!/bin/sh
+# react-supabase-harness pre-push — 원격 이력을 지우는 push 를 결과로 막는다.
+#
+# block-destructive-git 은 Claude 가 쓴 명령 문자열을 읽는다. 이 훅은 git 이 실제로 보낼 ref 갱신을
+# 받는다 — `--force`, `+refspec`, 별칭, 스크립트 안의 push 등 표기와 무관하게 같은 판정이다.
+#   막는 것: 기본 브랜치(main·master·원격 HEAD)의 non-fast-forward 갱신, 원격 ref 삭제, refs/harness/* 전송
+#   통과: 새 브랜치, fast-forward, 기능 브랜치의 rebase 후 강제 갱신(`--force-with-lease` 흐름)
+# 의도한 강제 push 는 사람이 직접 `git push --no-verify ...` 로 한다(에이전트의 --no-verify 는
+# block-destructive-git 이 막는다). 기존 pre-push 가 있었으면 pre-push.local 로 옮겨 먼저 실행한다.
+
+here=$(dirname "$0")
+if [ -x "$here/pre-push.local" ]; then
+  input=$(cat)
+  printf '%s\n' "$input" | "$here/pre-push.local" "$@" || exit $?
+else
+  input=$(cat)
+fi
+
+remote_head=$(git symbolic-ref -q --short "refs/remotes/$1/HEAD" 2>/dev/null | sed "s#^$1/##")
+status=0
+printf '%s\n' "$input" | {
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_ref" ] && continue
+    case "$local_ref$remote_ref" in
+      *refs/harness/*)
+        echo "harness pre-push: refs/harness/* (로컬 스냅샷)는 원격으로 보내지 않는다 — $remote_ref" >&2
+        status=1; continue ;;
+    esac
+    case "$local_sha" in
+      0000000000000000000000000000000000000000*)
+        echo "harness pre-push: 원격 ref 삭제 차단 — $remote_ref" >&2
+        status=1; continue ;;
+    esac
+    case "$remote_sha" in
+      0000000000000000000000000000000000000000*) continue ;;   # 새 브랜치
+    esac
+    branch=${remote_ref#refs/heads/}
+    case "$branch" in
+      main|master|"$remote_head") ;;
+      *) continue ;;                                          # 기능 브랜치는 rebase 후 갱신을 허용
+    esac
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      echo "harness pre-push: non-fast-forward 차단 — $remote_ref 의 원격 커밋 $(printf %.12s "$remote_sha") 이 보낼 이력에 없다(강제 push 는 원격 작업을 지운다)." >&2
+      echo "  다음 행동: git fetch 후 rebase/merge 로 원격 커밋을 포함시켜 다시 push 한다. 의도한 강제 push 면 사람이 직접 실행한다." >&2
+      status=1
+    fi
+  done
+  exit $status
+}

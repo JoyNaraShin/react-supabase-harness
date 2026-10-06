@@ -1071,6 +1071,140 @@ class ThirdReviewSelfProtectionTest(unittest.TestCase):
                 self.assertTrue(denied(self.bash(c)))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.33.0 결과 기반 센서 — 명령 표기 대신 결과(쓰기 대상·package.json·작업 트리·판정 기록)로 판정
+# ─────────────────────────────────────────────────────────────────────────────
+def _git(cwd, *a, inp=None):
+    return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=cwd, capture_output=True,
+                          text=True, input=inp)
+
+
+class _RepoCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = os.path.realpath(self.tmp.name)
+        _git(self.proj, "init", "-q", "-b", "main")
+        Path(self.proj, "package.json").write_text(json.dumps({"dependencies": {"zod": "^3"}}))
+        Path(self.proj, "supabase").mkdir()
+        Path(self.proj, "src").mkdir()
+        Path(self.proj, "src", "old.ts").write_text("x\n")
+        Path(self.proj, "docs").mkdir()
+        Path(self.proj, "docs", "n.md").write_text("n\n")
+        _git(self.proj, "add", "-A")
+        _git(self.proj, "commit", "-qm", "init")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def hook(self, name, payload):
+        return run_hook(name, dict(payload, cwd=self.proj), env={"CLAUDE_PROJECT_DIR": self.proj}, cwd=self.proj)
+
+    def gate(self, tool, ti, event="PreToolUse"):
+        return self.hook("gate-engine.py", {"tool_name": tool, "tool_input": ti, "hook_event_name": event})
+
+
+class SnapshotGuardTest(_RepoCase):
+    def snap(self, cmd):
+        return self.hook("snapshot-guard.py", {"tool_name": "Bash", "tool_input": {"command": cmd}})
+
+    def snapshots(self):
+        return _git(self.proj, "for-each-ref", "--sort=-refname", "--format=%(objectname)",
+                    "refs/harness/snapshots/").stdout.split()
+
+    def test_reads_are_skipped_and_unknown_commands_are_snapshotted(self):
+        Path(self.proj, "src", "wip.ts").write_text("uncommitted\n")
+        self.assertIsNone(self.snap("git status && ls src && git log --oneline -3 && grep -rn x src > /tmp/o"))
+        self.assertEqual(self.snapshots(), [])
+        out = self.snap("git clean -fd")
+        self.assertIn("git show", context(out))
+        self.assertEqual(len(self.snapshots()), 1)
+        self.snap("eval \"$(echo rm -rf src)\"")              # 모르는 표기 → 찍는다(같은 트리면 재사용)
+        self.assertEqual(len(self.snapshots()), 1)
+        files = _git(self.proj, "ls-tree", "-r", "--name-only", self.snapshots()[0]).stdout.split()
+        self.assertIn("src/wip.ts", files)                       # 미추적 포함
+        self.assertEqual(_git(self.proj, "diff", "--cached", "--name-only").stdout, "")  # 인덱스 무변경
+
+    def test_snapshot_restores_after_destruction(self):
+        Path(self.proj, "src", "old.ts").write_text("changed\n")
+        Path(self.proj, "src", "wip.ts").write_text("new\n")
+        self.snap("git reset --hard && git clean -fd")
+        _git(self.proj, "reset", "-q", "--hard")
+        _git(self.proj, "clean", "-qfd")
+        sha = self.snapshots()[0]
+        self.assertEqual(_git(self.proj, "show", f"{sha}:src/wip.ts").stdout, "new\n")
+        self.assertEqual(_git(self.proj, "show", f"{sha}:src/old.ts").stdout, "changed\n")
+
+    def test_snapshot_follows_cd_and_stays_inside_the_project(self):
+        inner = Path(self.proj, "pkgs", "inner")
+        inner.mkdir(parents=True)
+        _git(str(inner), "init", "-q")
+        Path(inner, "a.txt").write_text("1")
+        _git(str(inner), "add", "-A")
+        _git(str(inner), "commit", "-qm", "i")
+        self.snap("cd pkgs/inner && rm a.txt")                       # `cd` 뒤의 저장소를 찍는다
+        self.assertEqual(len(_git(str(inner), "for-each-ref", "refs/harness/").stdout.split("\n")) - 1, 1)
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        _git(outside.name, "init", "-q")
+        Path(outside.name, "b.txt").write_text("1")
+        self.snap(f"cd {outside.name} && rm b.txt")                    # 프로젝트 밖 저장소에는 ref 를 쓰지 않는다
+        self.assertEqual(_git(outside.name, "for-each-ref", "refs/harness/").stdout, "")
+
+    def test_push_hook_skipping_is_denied(self):
+        for c in ["git push --no-verify origin main", "git -c core.hooksPath=/dev/null push origin main"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(run_hook("block-destructive-git.py",
+                                                {"tool_name": "Bash", "tool_input": {"command": c}})))
+
+
+class PrePushHookTest(_RepoCase):
+    def setUp(self):
+        super().setUp()
+        self.bare = tempfile.TemporaryDirectory()
+        _git(self.bare.name, "init", "-q", "--bare")
+        _git(self.proj, "remote", "add", "origin", self.bare.name)
+        _git(self.proj, "push", "-q", "origin", "main")
+        r = subprocess.run(["sh", str(ROOT / "scripts" / "install-git-hooks.sh")], cwd=self.proj,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def tearDown(self):
+        self.bare.cleanup()
+        super().tearDown()
+
+    def push(self, *a):
+        return _git(self.proj, "push", "-q", *a)
+
+    def test_default_branch_rewrite_and_remote_delete_are_refused(self):
+        Path(self.proj, "x.txt").write_text("1")
+        _git(self.proj, "add", "x.txt")
+        _git(self.proj, "commit", "-qm", "ff")
+        self.assertEqual(self.push("origin", "main").returncode, 0)
+        _git(self.proj, "reset", "-q", "--hard", "HEAD~1")
+        _git(self.proj, "commit", "-q", "--allow-empty", "-m", "rewrite")
+        p = self.push("--force", "origin", "main")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("non-fast-forward", p.stderr)
+        self.assertEqual(self.push("origin", "+main:main").returncode, 1)
+        _git(self.proj, "checkout", "-q", "-b", "feat")
+        self.assertEqual(self.push("origin", "feat").returncode, 0)
+        _git(self.proj, "commit", "-q", "--amend", "-m", "amended")
+        self.assertEqual(self.push("--force-with-lease", "origin", "feat").returncode, 0)   # 기능 브랜치 rebase
+        self.assertEqual(self.push("origin", "--delete", "feat").returncode, 1)
+
+    def test_existing_hook_is_kept_and_chained(self):
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        _git(other.name, "init", "-q")
+        hook = Path(other.name, ".git", "hooks", "pre-push")
+        hook.write_text("#!/bin/sh\necho LOCAL-RAN >&2\nexit 0\n")
+        hook.chmod(0o755)
+        subprocess.run(["sh", str(ROOT / "scripts" / "install-git-hooks.sh")], cwd=other.name, capture_output=True)
+        self.assertTrue(Path(other.name, ".git", "hooks", "pre-push.local").is_file())
+        r = subprocess.run([str(hook), "origin", "x"], cwd=other.name, input="", capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("LOCAL-RAN", r.stderr)
+
 if __name__ == "__main__":
     unittest.main()
 

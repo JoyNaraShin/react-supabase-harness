@@ -33,6 +33,7 @@ Bypass: a sub-command whose first token is `CLAUDE_COMMIT_APPROVED=1` followed b
 git-commit block ONLY — every other destructive op stays blocked even with it.
 """
 import json
+import os
 import re
 import shlex
 import sys
@@ -46,7 +47,7 @@ WRAPPERS = {"bash", "sh", "zsh", "dash", "ash"}
 # anywhere used to excuse the whole command.
 RISKY_RAW = [re.compile(p) for p in (
     r"\bgit\b[^;&|\n]*\bcommit\b",
-    r"\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s-[a-z]*f\b|--force(?!-with-lease)|--delete|--mirror|--prune|\s\+\S|\s:\S)",
+    r"\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s-[a-z]*f\b|--force(?!-with-lease)|--delete|--mirror|--prune|--no-verify|\s\+\S|\s:\S)",
     r"--hard\b",
     r"\brm\s+(?:\S+\s+)*-[a-zA-Z]*[rR]",
     r"\bfind\b[^;&|\n]*(?:-delete|-exec\s+rm)",
@@ -69,6 +70,7 @@ def raw_risky(command: str) -> bool:
 # 에이전트가 할 수 있는 일이 없다 — 대안이나 사용자 직접 실행을 가리켜야 한다.
 ALTERNATIVES = [
     ("git commit", "`/commit` 스킬로 커밋 단위를 제안하고 사용자 승인을 받는다."),
+    ("--no-verify", "pre-push 훅이 막은 이유(기본 브랜치 강제 갱신·원격 삭제)를 사용자에게 보고한다."),
     ("--force", "`git push --force-with-lease` 를 쓴다(원격이 내가 본 상태일 때만 덮어쓴다)."),
     ("reset --hard", "`git stash` 로 작업을 보관한 뒤 이동한다."),
     ("checkout", "`git stash -u` 로 작업을 보관한다. 브랜치 이동이면 `git switch <브랜치>`."),
@@ -304,6 +306,9 @@ def check(tokens: list):
             return ("git commit 직접 실행 금지. `/commit` 스킬로 커밋 단위를 제안하고 "
                     "사용자 승인을 받은 뒤 그 스킬이 실행한다.")
         if sub == "push":
+            # pre-push 훅(scripts/install-git-hooks.sh)이 결과로 막는 강제 갱신을 훅 건너뛰기로 피하지 못하게
+            if "--no-verify" in rest or any("hookspath" in t.lower() for t in tokens[1:gi]):
+                return "git push --no-verify/core.hooksPath 변경(pre-push 훅 건너뛰기) 금지. 사용자 승인 필요."
             for a in rest:
                 if a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a):
                     return "git push --force/-f 금지(강제 push). 사용자 승인 필요. (`--force-with-lease` 허용)"
