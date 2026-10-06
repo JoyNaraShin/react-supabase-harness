@@ -21,6 +21,11 @@
 
 2. 탑승 기록 — 레포 루트에 .harness.json
    {"harness": "react-supabase-harness", "version": "<설치 버전>", "role": "project", "boarded": "<YYYY-MM-DD>"}
+   + 강제 장치 둘(사용자가 직접 — 하네스가 대신 켜지 않는다):
+     · .claude/settings.json 의 "permissions": {"ask": ["Bash(git commit *)"]}
+       → 커밋마다 Claude Code 가 직접 묻는다. 훅의 allow 로도 넘지 못하는 진짜 승인(공식 permissions 문서)
+     · sh "<하네스 경로>/scripts/install-git-hooks.sh"
+       → pre-push: 기본 브랜치 강제 갱신·원격 ref 삭제를 표기와 무관하게 막는다(기존 pre-push 는 보존)
 
 3. claude
    /plugin marketplace add JoyNaraShin/react-supabase-harness     # 글로벌 1회면 생략

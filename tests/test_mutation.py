@@ -31,6 +31,8 @@ MUTANTS = [
     ("snapshot-never", "gitsnap.py", "snapshot", "None"),
     ("changed-paths-none", "gitsnap.py", "changed_paths", "[]"),
     ("snapshot-read-only-always", "snapshot-guard.py", "_read_only", "True"),
+    ("verify-failed-never", "block-destructive-git.py", "verify_failed", "None"),
+    ("verdict-unparsed", "subagent-audit.py", "parse_verdict", "None"),
     ("bodySizeOver-never", "gate-engine.py", "p_body_size_over", "False"),
     ("globExists-always", "gate-engine.py", "p_glob_exists", "True"),
     ("pathGlob-never", "gate-engine.py", "p_path_glob", "False"),

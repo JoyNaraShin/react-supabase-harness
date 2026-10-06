@@ -1276,6 +1276,69 @@ class PrePushHookTest(_RepoCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("LOCAL-RAN", r.stderr)
 
+
+class SubagentAuditTest(_RepoCase):
+    def audit(self, event, agent="general-purpose", aid="ag1", msg="", active=False):
+        return self.hook("subagent-audit.py", {"hook_event_name": event, "agent_id": aid, "agent_type": agent,
+                                               "session_id": "s1", "last_assistant_message": msg,
+                                               "stop_hook_active": active})
+
+    def test_code_zone_side_effects_stop_the_subagent_once(self):
+        self.assertIsNone(self.audit("SubagentStart"))
+        Path(self.proj, "src", "old.ts").write_text("x;\n")          # 포매터 흉내
+        Path(self.proj, "docs", "n.md").write_text("edited\n")
+        out = self.audit("SubagentStop")
+        self.assertTrue(blocked(out))
+        self.assertIn("src/old.ts", out["reason"])
+        self.assertNotIn("docs/n.md", out["reason"])
+        self.assertIn("다음 행동", out["reason"])
+        self.assertIsNone(self.audit("SubagentStop", active=True))
+
+    def test_research_only_and_writer_types_pass(self):
+        self.audit("SubagentStart", aid="r")
+        Path(self.proj, "docs", "n.md").write_text("edited\n")
+        self.assertIsNone(self.audit("SubagentStop", aid="r"))
+        Path(self.proj, ".claude", "gates").mkdir(parents=True)
+        Path(self.proj, ".claude", "gates", "rules.jsonc").write_text('{"delegation": {"writers": ["implementer"]}}')
+        self.audit("SubagentStart", agent="my:implementer", aid="w")
+        Path(self.proj, "src", "old.ts").write_text("y\n")
+        self.assertIsNone(self.audit("SubagentStop", agent="my:implementer", aid="w"))
+
+    def test_hook_written_verdicts_gate_the_approved_commit(self):
+        commit = {"tool_name": "Bash", "tool_input": {"command": "CLAUDE_COMMIT_APPROVED=1 git commit -F /tmp/m"}}
+        self.audit("SubagentStop", agent="react-supabase-harness:verifier", aid="v1", msg="## Verdict\nFAIL")
+        out = self.hook("block-destructive-git.py", commit)
+        self.assertTrue(denied(out))
+        self.assertIn("/verify", reason(out))
+        self.audit("SubagentStop", agent="react-supabase-harness:verifier", aid="v2", msg="## Verdict\nPASS")
+        self.assertIsNone(self.hook("block-destructive-git.py", commit))
+        self.audit("SubagentStop", agent="react-supabase-harness:structure-fitness-reviewer", aid="s",
+                   msg="Critical 0 / High 1\nVERDICT(GAP 2)")
+        self.audit("SubagentStop", agent="Explore", aid="e", msg="## Verdict\nFAIL")   # 하네스 에이전트만 기록
+        recs = [json.loads(x) for x in Path(self.proj, ".claude/state/verdicts.jsonl").read_text().splitlines()]
+        self.assertEqual([r["verdict"] for r in recs], ["FAIL", "PASS", "GAP"])
+        self.assertEqual(recs[-1]["critical"], 0)
+
+    def test_verdict_file_is_agent_protected(self):
+        vf = f"{self.proj}/.claude/state/verdicts.jsonl"
+        self.assertTrue(denied(self.gate("Write", {"file_path": vf, "content": "{}"})))
+        self.assertTrue(denied(self.gate("Bash", {"command": "echo '{}' >> .claude/state/verdicts.jsonl"})))
+        self.assertIsNone(self.gate("Bash", {"command": "cat .claude/state/verdicts.jsonl"}))
+
+
+class CommitAskRuleNoticeTest(unittest.TestCase):
+    def test_notice_until_an_ask_rule_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "package.json").write_text("{}")
+            home = Path(d, "home")
+            home.mkdir()
+            env = {"CLAUDE_PROJECT_DIR": d, "HOME": str(home)}
+            self.assertIn("Bash(git commit *)", context(run_hook("session-start-summary.py", {}, env=env, cwd=d)))
+            Path(d, ".claude").mkdir()
+            Path(d, ".claude", "settings.json").write_text(json.dumps({"permissions": {"ask": ["Bash(git commit *)"]}}))
+            self.assertNotIn("Bash(git commit *)", context(run_hook("session-start-summary.py", {}, env=env, cwd=d)))
+
+
 if __name__ == "__main__":
     unittest.main()
 

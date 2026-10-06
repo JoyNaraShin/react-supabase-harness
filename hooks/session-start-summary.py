@@ -98,6 +98,19 @@ def current_phase(branch: str) -> str:
         return "?"
 
 
+def commit_ask_rule(project: str) -> bool:
+    """`git commit` 을 묻는 ask 규칙이 어느 설정에든 있는가. ask 규칙은 훅의 allow 로도 넘지 못한다(공식 permissions 문서)."""
+    for p in (os.path.join(project, ".claude", "settings.json"), os.path.join(project, ".claude", "settings.local.json"),
+              os.path.expanduser("~/.claude/settings.json")):
+        try:
+            ask = (json.load(open(p, encoding="utf-8")).get("permissions") or {}).get("ask") or []
+        except Exception:
+            continue
+        if any(isinstance(r, str) and (r.strip() == "Bash" or r.replace(" ", "").startswith("Bash(gitcommit")) for r in ask):
+            return True
+    return False
+
+
 def main() -> None:
     branch = current_branch()
     ab = ahead_behind(branch)
@@ -114,6 +127,9 @@ def main() -> None:
     plugin = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if plugin and os.path.realpath(plugin) != os.path.realpath(project):
         lines.append(f"작업 대상 = {project} · 하네스 설치 경로 {plugin} 는 규칙 문서를 읽는 곳이지 작업·리뷰 대상이 아니다")
+    if os.path.isfile(os.path.join(project, "package.json")) and not commit_ask_rule(project):
+        lines.append("커밋 승인이 자기 신고 상태다 — permissions.ask 에 `Bash(git commit *)` 가 없다. 플랫폼이 직접 "
+                     "묻게 하려면 사용자에게 BOOTSTRAP 2단계(.claude/settings.json)를 제안하라(설정 변경은 사용자 결정).")
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",
         "additionalContext": "\n".join(lines),

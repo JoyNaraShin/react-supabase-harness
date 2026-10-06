@@ -70,6 +70,7 @@ def raw_risky(command: str) -> bool:
 # 에이전트가 할 수 있는 일이 없다 — 대안이나 사용자 직접 실행을 가리켜야 한다.
 ALTERNATIVES = [
     ("git commit", "`/commit` 스킬로 커밋 단위를 제안하고 사용자 승인을 받는다."),
+    ("verify FAIL", "고친 뒤 `/verify` 를 다시 돌려 PASS 기록을 받고 커밋한다."),
     ("--no-verify", "pre-push 훅이 막은 이유(기본 브랜치 강제 갱신·원격 삭제)를 사용자에게 보고한다."),
     ("--force", "`git push --force-with-lease` 를 쓴다(원격이 내가 본 상태일 때만 덮어쓴다)."),
     ("reset --hard", "`git stash` 로 작업을 보관한 뒤 이동한다."),
@@ -465,10 +466,44 @@ def scan(command: str):
     for sub in split_subcommands(tokens):
         # commit 승인 우회: 정확히 `CLAUDE_COMMIT_APPROVED=1 git commit ...` 만.
         if len(sub) >= 3 and sub[0] == "CLAUDE_COMMIT_APPROVED=1" and sub[1] == "git" and sub[2] == "commit":
+            failed = verify_failed()
+            if failed:
+                return failed
             continue
         reason = check(strip_env(sub))
         if reason:
             return reason
+    return None
+
+
+def verify_failed():
+    """훅이 기록한 마지막 verifier 판정(subagent-audit → .claude/state/verdicts.jsonl)이 지금 HEAD 위의 FAIL 이면
+    승인 커밋도 막는다. 기록은 에이전트가 쓸 수 없는 파일이라 대화 속 "검증 통과" 주장과 다르다.
+    기록이 없거나 그 뒤 커밋이 있었으면(HEAD 가 다르면) 판단하지 않는다."""
+    import subprocess
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or "."
+    try:
+        lines = open(os.path.join(root, ".claude", "state", "verdicts.jsonl"), encoding="utf-8").read().splitlines()
+    except Exception:
+        return None
+    last = None
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+        except Exception:
+            continue
+        if r.get("agent_type") == "verifier":
+            last = r
+    if not last or last.get("verdict") != "FAIL":
+        return None
+    try:
+        head = subprocess.run(["git", "-C", root, "rev-parse", "-q", "--verify", "HEAD"], capture_output=True,
+                              text=True, timeout=3).stdout.strip()
+    except Exception:
+        return None
+    if head and last.get("head") == head:
+        return ("verify FAIL 기록 위의 커밋 — 마지막 verifier 판정이 FAIL 이고 그 뒤 PASS 가 없다"
+                "(.claude/state/verdicts.jsonl, 훅 기록). 사용자 승인 필요.")
     return None
 
 

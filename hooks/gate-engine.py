@@ -454,7 +454,7 @@ def evaluate(rule: dict, ctx: dict):
 # ─────────────────────────────────────────────────────────────────────────────
 
 PROTECTED_PATH = re.compile(
-    r"(^|/)\.claude/(state/[\w.-]*gate-off|gates/rules\.jsonc?)$"
+    r"(^|/)\.claude/(state/[\w.-]*gate-off|state/verdicts\.jsonl|gates/rules\.jsonc?)$"
     r"|(^|/)\.claude/plugins/.*/gates/rules\.jsonc?$", re.IGNORECASE)
 HARNESS_ID = "react-supabase-harness"
 # 설정에서 게이트를 끄는 키 — 탈출구 env · 훅 전체 끄기 · 플러그인 비활성화(JSON 과 jq 문법 둘 다)
@@ -550,7 +550,7 @@ def settings_turns_off(ctx: dict) -> bool:
 
 # 셸 명령은 하위 명령(`;` `&&` `|` 줄바꿈) 단위로 본다. 명령 전체에서 "보호 대상 언급"과 "쓰기"를
 # 따로 찾으면, `rg 'gate-off' hooks/ > out.txt` 처럼 읽기 결과를 다른 곳에 저장하는 정상 작업이 막힌다.
-PROTECTED_MENTION = re.compile(r"gate-?off|rules\.jsonc?|\.claude/[{]?\s*(?:state|gates)\b", re.IGNORECASE)
+PROTECTED_MENTION = re.compile(r"gate-?off|rules\.jsonc?|verdicts\.jsonl|\.claude/[{]?\s*(?:state|gates)\b", re.IGNORECASE)
 CLAUDE_DIR = re.compile(r"(?:^|\s)(?:\S*/)?\.claude/?\.?(?=\s|$)")
 PLUGIN_MENTION = re.compile(r"\.claude/plugins(?:/(?!data(?:/|\s|$))|/?(?=\s|$))|\$\{?CLAUDE_PLUGIN_ROOT\b")
 SETTINGS_FILE = re.compile(r"(?:^|/)settings(?:\.local)?\.json$")
