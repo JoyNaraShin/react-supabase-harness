@@ -34,6 +34,7 @@ import shellparse  # noqa: E402
 
 
 def ctx_from(data: dict) -> dict:
+    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".")
     tool = data.get("tool_name") or ""
     ti = data.get("tool_input") or {}
     edits = None
@@ -57,8 +58,28 @@ def ctx_from(data: dict) -> dict:
         "command": ti.get("command") or "",
         "replace_all": bool(ti.get("replace_all")),
         "edits": edits,
-        "root": Path(os.environ.get("CLAUDE_PROJECT_DIR") or "."),
+        "root": root,
+        "cwd": str(data.get("cwd") or root),
+        "phase": "post" if data.get("hook_event_name") == "PostToolUse" else "pre",
     }
+
+
+DELETE_VERBS = {"rm", "unlink", "rmdir", "shred"}
+
+
+def _bash_writes(ctx) -> list:
+    """Bash 가 프로젝트 안에 쓰는 (절대 경로, 동사) 목록. heredoc·cp·sed -i 로 만든 코드도 Write 와 같은 축으로 본다."""
+    if "writes" not in ctx:
+        out, base = [], os.path.realpath(str(ctx["root"]))
+        for seg, here in shellparse.segments(ctx["command"], ctx["cwd"]):
+            toks = shellparse._tokens(seg)
+            verb = toks[0].rsplit("/", 1)[-1] if toks else ""
+            for t in shellparse.write_targets(seg, ctx["command"]):
+                p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
+                if os.path.realpath(p).startswith(base + os.sep):
+                    out.append((p.replace("\\", "/"), verb))
+        ctx["writes"] = out
+    return ctx["writes"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,10 +107,36 @@ def _install_args(cmd: str) -> list:
             out += toks[1:]
         elif head in PKG_MANAGERS and any(t.lower() in INSTALL_VERBS for t in toks[1:]):
             out += toks[1:]
+        elif head in PKG_MANAGERS and "pkg" in toks and "set" in toks:
+            # `npm pkg set dependencies.<이름>=<버전>` — package.json 을 직접 고치는 설치
+            out += [m.group(1) for t in toks for m in [PKG_SET_KEY.match(t)] if m]
     return out
-IMPORT_SPEC = re.compile(r"""(?:from|require\(|import\()\s*['"]([^'"]+)['"]""")
-DEP_KEY = re.compile(r'"([^"]+)"\s*:\s*"[^"]*"')
+
+
+PKG_SET_KEY = re.compile(r"^(?:dev|peer|optional)?[dD]ependencies(?:\.|\[)([^=\]]+?)\]?=")
+
+
+def _spec_names(spec: str) -> list:
+    """설치 스펙 하나가 실제로 가져오는 패키지 이름 후보.
+    `별칭@npm:<이름>@1` · `npm:<이름>` · 레지스트리 tarball URL(`…/<이름>/-/<이름>-1.0.0.tgz`) · `<이름>-1.0.0.tgz`."""
+    s = spec.strip().strip("'\"")
+    names = [s]
+    if "npm:" in s:
+        names.append(s.split("npm:", 1)[1])
+    m = re.search(r"/((?:@[^/]+/)?[^/]+)/-/[^/]+\.tgz$", s)
+    if m:
+        names.append(m.group(1))
+    m = re.match(r"^(?:.*/)?((?:@[^/]+/)?[^/]+?)-v?\d+\.\d+[^/]*\.tgz$", s)
+    if m:
+        names.append(m.group(1))
+    return names
+# `from '<x>'`·`require('<x>')`·`import('<x>')`, 그리고 side-effect import `import '<x>/style.css'`
+IMPORT_SPEC = re.compile(r"""(?:\bfrom|\brequire\(|\bimport\(|^\s*import)\s*['"]([^'"]+)['"]""", re.MULTILINE)
+CSS_IMPORT = re.compile(r"""@(?:import|use|forward)\s+(?:url\()?\s*['"]?([^'")\s;]+)""")
+DEP_KEY = re.compile(r'"([^"]+)"\s*:\s*"([^"]*)"')
 JS_SOURCE = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte", ".astro")
+CSS_SOURCE = (".css", ".scss", ".sass", ".less", ".pcss")
+DEP_FIELDS = ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies")
 
 
 def _pkg_name(spec: str) -> str:
@@ -109,6 +156,10 @@ def _pkg_hit(spec: str, banned: list):
 
 def p_path_glob(ctx, a):
     pats = a if isinstance(a, list) else [a]
+    if ctx["tool"] == "Bash":
+        hits = [w for w in _bash_writes(ctx) if any(fnmatch.fnmatch(w[0], g) for g in pats)]
+        ctx["matched_writes"] = hits
+        return (bool(hits), hits[0][0] if hits else "")
     p = ctx["path"]
     return (any(fnmatch.fnmatch(p, g) for g in pats), p)
 
@@ -130,35 +181,90 @@ def p_body_regex(ctx, a):
     return (False, "")
 
 
+def _any_hit(specs, banned):
+    for spec in specs:
+        for n in _spec_names(spec):
+            b = _pkg_hit(n, banned)
+            if b:
+                return b
+    return None
+
+
+def _dep_hits(text: str, banned: list) -> set:
+    """package.json 텍스트에서 의존성 필드의 금지 패키지(키 또는 값 스펙)."""
+    try:
+        data = json.loads(text)
+    except Exception:
+        return set()
+    hits = set()
+    for f in DEP_FIELDS:
+        for k, v in (data.get(f) or {}).items() if isinstance(data.get(f), dict) else []:
+            b = _any_hit([k, str(v)], banned)
+            if b:
+                hits.add(b)
+    return hits
+
+
+def _introduced_deps(root: Path, banned: list):
+    """명령 실행 결과로 새로 들어온 금지 의존성 — 커밋된 package.json(HEAD)에 없던 것만.
+    설치 표기(별칭·tarball·`npm pkg set`·스크립트)와 무관하게 결과로 판정한다. 이미 커밋된 의존성은
+    이 훅의 몫이 아니다(매 명령마다 같은 경고가 반복되면 게이트가 꺼진다). git 이 아니면 판정하지 않는다."""
+    import subprocess
+    files = [root / "package.json"] + sorted(root.glob("*/package.json")) + sorted(root.glob("*/*/package.json"))
+    for f in files:
+        if "node_modules" in f.parts or not f.is_file():
+            continue
+        rel = str(f.relative_to(root))
+        try:
+            r = subprocess.run(["git", "-C", str(root), "show", f"HEAD:{rel}"], capture_output=True, text=True,
+                               timeout=5)
+        except Exception:
+            return None
+        if r.returncode != 0 and "not a git repository" in r.stderr.lower():
+            return None
+        before = _dep_hits(r.stdout, banned) if r.returncode == 0 else set()
+        new = _dep_hits(f.read_text(encoding="utf-8", errors="replace"), banned) - before
+        if new:
+            return f"{sorted(new)[0]} ({rel})"
+    return None
+
+
 def p_pkg_ref(ctx, a):
-    """금지 패키지 참조를 세 경로에서 동시에 본다 — 설치 명령 · deps · import."""
+    """금지 패키지 참조 — 설치 명령 · deps · import(side-effect·CSS 포함). 실행 뒤(post)에는 결과 package.json."""
     banned = a["packages"] if isinstance(a, dict) else a
+    if ctx["phase"] == "post":
+        hit = _introduced_deps(ctx["root"], banned)
+        return (bool(hit), hit or "")
     if ctx["tool"] == "Bash":
-        for tok in _install_args(ctx["command"]):
-            b = _pkg_hit(re.sub(r"^npm:", "", tok), banned)
-            if b:
-                return (True, b)
-        return (False, "")
+        b = _any_hit(_install_args(ctx["command"]), banned)
+        return (bool(b), b or "")
     if ctx["path"].endswith("package.json"):
-        for m in DEP_KEY.finditer(ctx["body"]):
-            b = _pkg_hit(m.group(1), banned)
-            if b:
-                return (True, b)
-        return (False, "")
-    # import 구문은 JS 계열 소스에서만 의미가 있다. .py·.md 안의 예시 문자열은 도입이 아니다
+        b = _any_hit([x for m in DEP_KEY.finditer(ctx["body"]) for x in m.groups()], banned)
+        return (bool(b), b or "")
+    # import 구문은 JS·CSS 계열 소스에서만 의미가 있다. .py·.md 안의 예시 문자열은 도입이 아니다
     # (실측: 테스트 픽스처 문자열을 UI 라이브러리 도입으로 차단).
-    if not ctx["path"].lower().endswith(JS_SOURCE):
+    low = ctx["path"].lower()
+    if low.endswith(JS_SOURCE):
+        specs = [m.group(1) for m in IMPORT_SPEC.finditer(ctx["body"])]
+    elif low.endswith(CSS_SOURCE):
+        specs = [m.group(1) for m in CSS_IMPORT.finditer(ctx["body"])]
+    else:
         return (False, "")
-    for m in IMPORT_SPEC.finditer(ctx["body"]):
-        b = _pkg_hit(m.group(1), banned)
-        if b:
-            return (True, b)
-    return (False, "")
+    b = _any_hit(specs, banned)
+    return (bool(b), b or "")
 
 
 def p_body_size_over(ctx, a):
     """'한 문장 diff' 예외의 기계적 정의. 신규 파일 생성은 크기와 무관하게 '큼'."""
     lines, chars = a.get("lines", 20), a.get("chars", 800)
+    if ctx["tool"] == "Bash":
+        writes = ctx.get("matched_writes", _bash_writes(ctx))
+        for p, verb in writes:
+            if verb not in DELETE_VERBS and not Path(p).exists():
+                return (True, f"신규 파일 {os.path.basename(p)} (셸)")
+        body = ctx["command"]
+        big = bool(writes) and (body.count("\n") + 1 > lines or len(body) > chars)
+        return (big, f"셸 {body.count(chr(10)) + 1}줄/{len(body)}자")
     if ctx["tool"] == "Write" and ctx["path"] and not Path(ctx["path"]).exists():
         return (True, "신규 파일")
     if ctx["replace_all"]:
@@ -544,6 +650,24 @@ def self_protect(ctx: dict):
             "사용자에게 설명하고 사용자가 직접 바꾸게 하라.")
 
 
+def post_check(ctx: dict) -> None:
+    """PostToolUse — 룰의 `after` 에 든 도구가 끝난 뒤 결과로 판정한다(명령 표기와 무관).
+    막을 수는 없으니(이미 실행됨) 모델에게 되돌리라고 돌려준다."""
+    for rule in load_rules():
+        if rule.get("enabled") is False or ctx["tool"] not in (rule.get("after") or []):
+            continue
+        m = evaluate(rule, ctx)
+        if m is None:
+            continue
+        msg = (rule.get("message") or f"게이트 `{rule['id']}` 위반").replace("{match}", m)
+        print(json.dumps({"decision": "block", "reason": (
+            "방금 실행한 명령의 결과가 게이트에 걸렸다(설치 표기와 무관하게 결과 파일을 본다).\n" + msg
+            + "\n\n다음 행동: 이 명령이 넣은 것을 되돌려라(예: 패키지 매니저의 remove). 필요한 도입이면 "
+              "사용자에게 이유를 설명하고 결정을 받는다.")}, ensure_ascii=False))
+        sys.exit(0)
+    sys.exit(0)
+
+
 def main() -> None:
     try:
         data = json.load(sys.stdin)
@@ -554,6 +678,8 @@ def main() -> None:
     if not ctx["tool"]:
         sys.exit(0)
 
+    if ctx["phase"] == "post":
+        post_check(ctx)
     guard = self_protect(ctx)
     if guard:
         print(json.dumps({"hookSpecificOutput": {

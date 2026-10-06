@@ -7,12 +7,13 @@
 //   toolIn        [도구명…]                        이 도구 호출인가
 //   pathGlob      "패턴" | [패턴…]                  파일 경로 매칭
 //   bodyRegex     "정규식" | {pattern, except, flags}  본문 매칭 (except = 오탐 제외)
-//   pkgRef        {packages:[…]}                   패키지 참조 (설치명령·deps·import 동시)
+//   pkgRef        {packages:[…]}                   패키지 참조 (설치명령·deps·import·CSS @import 동시, after 단계에선 결과 package.json)
 //   bodySizeOver  {lines, chars}                   '한 문장 diff' 초과 여부
 //   globExists    "패턴" | [패턴…] | {pattern, except} 프로젝트에 해당 파일이 있는가(except = 제외할 파일명 패턴)
 //   harnessTarget true                             하네스 관할 프로젝트인가
 //   escapeHatch   "이름"                            탈출구가 켜졌는가
 //
+// on = 실행 전(PreToolUse)에 볼 도구, after = 실행 뒤(PostToolUse)에 결과로 다시 볼 도구.
 // when 은 AND 리스트. 각 항목에 "not": true 를 넣으면 부정.
 // 프로젝트에서 덮어쓰려면 $CLAUDE_PROJECT_DIR/.claude/gates/rules.jsonc 에 같은 id 로.
 // `delegation` 객체는 룰이 아니라 block-impl-delegation 훅이 읽는 데이터다(키 단위로 덮어쓴다).
@@ -34,6 +35,8 @@
       "id": "no-ui-library",
       // RULES §8 기본 정책 — 외부 UI 컴포넌트 라이브러리를 쓰지 않는다(프로젝트 룰로 끌 수 있다)
       "on": ["Write", "Edit", "Bash"],
+      // after = 도구가 끝난 뒤(PostToolUse) 결과로 다시 본다 — 별칭·tarball·스크립트로 넣어도 package.json 에 남는다
+      "after": ["Bash"],
       "when": [
         { "not": true, "escapeHatch": "ui-lib-gate-off" },
         {
@@ -59,7 +62,8 @@
       "id": "plan-first",
       // RULES §1 「Plan vs Execute — 코드 먼저 금지」
       // 소규모 편집(20줄·800자 이하)은 통과 — RULES §1 "한 문장 diff" 예외의 기계적 정의.
-      "on": ["Write", "Edit"],
+      // Bash 는 쓰기 대상(heredoc·cp·sed -i 등, hooks/shellparse.py)으로 같은 판정을 받는다
+      "on": ["Write", "Edit", "Bash"],
       "when": [
         { "not": true, "escapeHatch": "plan-gate-off" },
         { "harnessTarget": true },

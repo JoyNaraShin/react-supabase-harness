@@ -24,6 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # (뮤턴트 id, 파일, 함수명 또는 None, 끼워 넣을 return 값 또는 (old, new) 치환)
 MUTANTS = [
     ("pkgRef-never", "gate-engine.py", "p_pkg_ref", "None"),
+    ("bash-writes-none", "gate-engine.py", "_bash_writes", "[]"),
+    ("spec-names-plain", "gate-engine.py", "_spec_names", "[spec]"),
+    ("introduced-deps-never", "gate-engine.py", "_introduced_deps", "None"),
+    ("post-check-noop", "gate-engine.py", "post_check", "None"),
     ("snapshot-never", "gitsnap.py", "snapshot", "None"),
     ("changed-paths-none", "gitsnap.py", "changed_paths", "[]"),
     ("snapshot-read-only-always", "snapshot-guard.py", "_read_only", "True"),

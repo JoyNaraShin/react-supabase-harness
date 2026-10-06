@@ -1103,6 +1103,77 @@ class _RepoCase(unittest.TestCase):
         return self.hook("gate-engine.py", {"tool_name": tool, "tool_input": ti, "hook_event_name": event})
 
 
+class PlanFirstShellTest(_RepoCase):
+    BIG = "\n".join(f"export const v{i} = {i}" for i in range(40))
+
+    def test_shell_created_code_needs_a_plan(self):
+        for c in [f"cat > src/new.ts <<'EOF'\n{self.BIG}\nEOF", f"cd src && cat > f.ts <<'EOF'\n{self.BIG}\nEOF",
+                  "cp /tmp/x.ts src/copied.ts", f"cat > src/old.ts <<'EOF'\n{self.BIG}\nEOF"]:
+            with self.subTest(c=c[:40]):
+                out = self.gate("Bash", {"command": c})
+                self.assertTrue(denied(out))
+                self.assertIn("다음 행동", reason(out))
+
+    def test_small_edits_deletes_and_outside_paths_pass(self):
+        for c in ["sed -i '' 's/x/y/' src/old.ts", "rm src/old.ts", "ls src && cat src/old.ts",
+                  f"cat > notes.md <<'EOF'\n{self.BIG}\nEOF", f"cat > /tmp/src/x.ts <<'EOF'\n{self.BIG}\nEOF"]:
+            with self.subTest(c=c[:40]):
+                self.assertIsNone(self.gate("Bash", {"command": c}))
+
+    def test_a_plan_unlocks_shell_writes(self):
+        Path(self.proj, "docs", "plans").mkdir()
+        Path(self.proj, "docs", "plans", "phase-1.md").write_text("# plan")
+        self.assertIsNone(self.gate("Bash", {"command": f"cat > src/new.ts <<'EOF'\n{self.BIG}\nEOF"}))
+
+
+class BannedPackageFormsTest(_RepoCase):
+    LIB = "an" + "td"
+
+    def test_alias_tarball_pkg_set_and_style_imports_are_denied(self):
+        b = self.LIB
+        for tool, ti in [("Bash", {"command": f"pnpm add ui@npm:{b}"}),
+                         ("Bash", {"command": f"npm i https://registry.npmjs.org/{b}/-/{b}-5.0.0.tgz"}),
+                         ("Bash", {"command": f"npm i ./{b}-5.1.0.tgz"}),
+                         ("Bash", {"command": f"npm pkg set dependencies.{b}=^5"}),
+                         ("Write", {"file_path": f"{self.proj}/package.json",
+                                    "content": json.dumps({"dependencies": {"ui": f"npm:{b}@^5"}})}),
+                         ("Edit", {"file_path": f"{self.proj}/src/old.ts", "old_string": "x",
+                                   "new_string": f"import '{b}/dist/reset.css'"}),
+                         ("Write", {"file_path": f"{self.proj}/src/index.css", "content": f"@import '{b}/dist/reset.css';"}),
+                         ("Write", {"file_path": f"{self.proj}/src/a.scss", "content": f"@use '~{b}/lib/style';"})]:
+            with self.subTest(tool=tool, ti=json.dumps(ti)[:60]):
+                self.assertTrue(denied(self.gate(tool, ti)))
+
+    def test_ordinary_styles_and_scripts_pass(self):
+        for tool, ti in [("Write", {"file_path": f"{self.proj}/src/index.css",
+                                    "content": "@import './tokens.css';\n@import 'tailwindcss';"}),
+                         ("Edit", {"file_path": f"{self.proj}/src/old.ts", "old_string": "x",
+                                   "new_string": "import './index.css'"}),
+                         ("Bash", {"command": "npm pkg set scripts.dev=vite"})]:
+            with self.subTest(tool=tool):
+                self.assertIsNone(self.gate(tool, ti))
+
+    def test_outcome_check_after_any_command(self):
+        pj = Path(self.proj, "package.json")
+        pj.write_text(json.dumps({"dependencies": {"zod": "^3", "ui": f"npm:{self.LIB}@^5"}}))
+        out = self.gate("Bash", {"command": "node scripts/setup.js"}, event="PostToolUse")
+        self.assertTrue(blocked(out))
+        self.assertIn("다음 행동", out["reason"])
+        pj.write_text(json.dumps({"dependencies": {"zod": "^3", "dayjs": "^1"}}))
+        self.assertIsNone(self.gate("Bash", {"command": "pnpm add dayjs"}, event="PostToolUse"))
+
+    def test_outcome_check_ignores_committed_deps_and_honors_the_hatch(self):
+        pj = Path(self.proj, "package.json")
+        pj.write_text(json.dumps({"dependencies": {self.LIB: "^5"}}))
+        _git(self.proj, "commit", "-qam", "legacy")
+        self.assertIsNone(self.gate("Bash", {"command": "pnpm i"}, event="PostToolUse"))
+        pj.write_text(json.dumps({"dependencies": {self.LIB: "^5", "@mui/material": "^5"}}))
+        self.assertTrue(blocked(self.gate("Bash", {"command": "pnpm i"}, event="PostToolUse")))
+        Path(self.proj, ".claude", "state").mkdir(parents=True)
+        Path(self.proj, ".claude", "state", "ui-lib-gate-off").write_text("")
+        self.assertIsNone(self.gate("Bash", {"command": "pnpm i"}, event="PostToolUse"))
+
+
 class SnapshotGuardTest(_RepoCase):
     def snap(self, cmd):
         return self.hook("snapshot-guard.py", {"tool_name": "Bash", "tool_input": {"command": cmd}})
