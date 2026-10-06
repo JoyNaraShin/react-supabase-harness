@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(git *)
 ---
 
-`docs/RULES.md`(커밋 승인 절차)를 표준화한 스킬. PreToolUse 차단 훅(`block-destructive-git`)을 우회하는 **유일한 합법 경로**이며, 서브커맨드 접두사 `CLAUDE_COMMIT_APPROVED=1` 로 훅을 bypass(커밋 한정).
+`${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(커밋 승인 절차)를 표준화한 스킬. PreToolUse 차단 훅(`block-destructive-git`)을 우회하는 **유일한 합법 경로**이며, 서브커맨드 접두사 `CLAUDE_COMMIT_APPROVED=1` 로 훅을 bypass(커밋 한정).
 
 ## 1. 상태 수집 (병렬)
 - `git status` · `git diff --stat` · `git diff --cached --stat` · `git log --oneline -5`(스타일 참조)
@@ -23,7 +23,7 @@ allowed-tools: Bash(git *)
 - `<type>(<scope>): <subject>` — 70자 이내 (Conventional Commits)
 - 본문 1~2문단 — "왜"에 초점
 - `Refs: <plan § / issue #>` (관련 있으면)
-- `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` footer (현재 사용 모델에 맞춤)
+- `Co-Authored-By: Claude <현재 세션 모델명> <noreply@anthropic.com>` footer — 모델명을 리터럴로 고정하지 않는다(RULES §11)
 
 ## 4. 사용자 승인
 출력: 스테이징 대상 파일 목록(정확한 파일명 — `git add .`/`-A` 금지) + 커밋 메시지 초안.
@@ -34,7 +34,7 @@ allowed-tools: Bash(git *)
 2. `CLAUDE_COMMIT_APPROVED=1 git commit -m "$(cat <<'EOF'`
    `<메시지 본문>`
    ``
-   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
+   `Co-Authored-By: Claude <현재 세션 모델명> <noreply@anthropic.com>`
    `EOF`
    `)"`
 3. `git status` 로 성공 확인 → 마지막 커밋 sha + 제목 출력

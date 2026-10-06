@@ -1,18 +1,19 @@
 ---
 name: db-migration
-description: Supabase 마이그레이션 생성 (supabase/migrations/YYYYMMDD_<slug>.sql) — rollback 주석 + RLS enable + 정책 스켈레톤. 이후 타입 재생성 안내. 수동 호출 전용 슬래시 명령(/db-migration <slug>).
+description: Supabase 마이그레이션 생성 (supabase/migrations/<14자리 타임스탬프>_<slug>.sql — `supabase migration new` 로 만든다) — rollback 주석 + RLS enable + 정책 스켈레톤. 이후 타입 재생성 안내. 수동 호출 전용 슬래시 명령(/db-migration <slug>).
 disable-model-invocation: true
-allowed-tools: Bash(date *), Write, Glob
+allowed-tools: Bash(supabase migration new *), Read, Write, Glob
 argument-hint: "<slug> (snake_case, 예: add_posts_table)"
 ---
 
-`docs/INFRA.md`(Migration Safety) 규약에 맞춰 마이그레이션을 생성한다.
+`${CLAUDE_PLUGIN_ROOT}/docs/INFRA.md`(Migration Safety) 규약에 맞춰 마이그레이션을 생성한다.
 
 ## Workflow
 1. **입력 검증**: `$ARGUMENTS` 가 snake_case 인지 확인(kebab·space·대문자 시 에러).
-2. **날짜 스탬프**: `date +%Y%m%d` → 파일명 prefix.
-3. **중복 체크**: `supabase/migrations/<YYYYMMDD>_<slug>.sql` 존재 시 경고 후 종료.
-4. **파일 생성** — 아래 헤더 컨벤션으로 작성:
+2. **중복 체크**: `supabase/migrations/*_<slug>.sql` 이 이미 있으면 경고 후 종료.
+3. **빈 파일 생성**: `supabase migration new <slug>` — CLI 가 `<YYYYMMDDHHMMSS>_<slug>.sql`(UTC 14자리)을 만든다.
+   파일명을 손으로 짓지 않는다: 버전은 이 타임스탬프이고, 날짜만 쓰면 같은 날 두 마이그가 같은 버전으로 충돌한다.
+4. **내용 작성** — 만들어진 파일에 아래 헤더 컨벤션으로 쓴다:
    ```sql
    -- Phase: <plan 링크 / 무엇을 왜>
    -- 결정: <접근 근거 한 줄>
@@ -39,7 +40,7 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      그리고 `drop` 은 **ACL 을 초기화**하므로 grant/revoke 를 반드시 다시 쓴다.
    - **새 함수의 회수는 `from public, anon` 둘 다** — `revoke … from public` 만으로는 부족하다.
      프로젝트 맨 앞 마이그에 `alter default privileges … on functions` 가 있으면 새 함수에
-     **anon 직접 GRANT** 가 따로 붙기 때문이다(`public` 회수로는 안 지워진다). 실측 2026-09-24:
+     **anon 직접 GRANT** 가 따로 붙기 때문이다(`public` 회수로는 안 지워진다). 실측:
      `revoke … from public` 만 쓴 RPC 가 anon 실행 가능인 채 CI 를 빨갛게 만들었다.
      ```sql
      revoke all on function public.<name>(<인자타입…>) from public, anon;
@@ -74,7 +75,7 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      supabase db dump --linked --data-only --schema public -f <경로>.sql
      ```
      스코프를 빼면 `auth.users`(이메일·암호 해시)와 **`auth.refresh_tokens`(유효한 세션 토큰)**
-     가 같이 담긴다. 실측 사고 2026-09-17: 그대로 푸시돼 수습이 **토큰 무효화 + force-push**
+     가 같이 담긴다. 실측 사고: 그대로 푸시돼 수습이 **토큰 무효화 + force-push**
      였다 — 푸시된 뒤에는 파일을 지우는 것만으로 끝나지 않는다.
      🔴 **절차 문서에 주의를 적는 것으로 끝내지 말 것.** 사람이 기억해서 붙이는 플래그는
      언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(예: `scripts/lint-sql-dump-scope.mjs` —
@@ -96,10 +97,12 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
    - [ ] UPDATE 정책의 `WITH CHECK` 이 `USING` 만큼 강한가? 부모 id 컬럼이 있으면 재부모화 점검?
    - [ ] 가드 추가 시 **정상 경로 단언을 교차 트랜잭션으로** 썼나?
          (`set local session_replication_role = replica` 로 `updated_at` 을 과거로 민 뒤 UPDATE)
+5b. **새 RLS 테이블·SECURITY DEFINER 함수면 pgTAP 동작 테스트를 같이 만든다** — `supabase/tests/<slug>_test.sql`. 최소: anon 도달 여부 · 본인/타인 행 가시성 · 금지된 UPDATE 가 42501 로 거부되는지. 사용자 위장은 `set local role authenticated` + `set_config('request.jwt.claims', …)`(+ 구버전 호환 `request.jwt.claim.sub`). 예시 = `/auth-scaffold` 1b. 정책 문장을 읽는 것은 검증이 아니다.
 6. **후속 안내**:
    ```
    supabase db reset                                                  # 로컬 재적용
-   supabase gen types typescript --local > src/lib/database.types.ts  # 타입 재생성
+   supabase test db                                                   # pgTAP
+   supabase gen types --lang typescript --local > src/lib/database.types.ts  # 타입 재생성
    ```
 
 ## 참고

@@ -6,7 +6,7 @@ allowed-tools: Bash(git *)
 argument-hint: <slug> [--issue=<N>] [--type=feat|chore|fix|docs|refactor]
 ---
 
-`docs/RULES.md`(브랜치 전략) 규약대로 분기.
+`${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(브랜치 전략) 규약대로 분기.
 
 ## 1. 인자 파싱
 - `$ARGUMENTS[0]` = **slug**(필수, kebab-case — 예: `board-pagination`)

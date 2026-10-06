@@ -6,7 +6,7 @@ allowed-tools: Bash(git *), Bash(gh *)
 argument-hint: [--draft] [--no-close] [--title=<t>] [--body-file=<path>]
 ---
 
-`docs/RULES.md`(PR 규칙) 구현. Story PR 표준화.
+`${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(PR 규칙) 구현. Story PR 표준화.
 
 ## 1. 상태 수집 (병렬)
 - `git rev-parse --abbrev-ref HEAD` → 현재 브랜치

@@ -13,8 +13,8 @@ argument-hint: [경로 | 비우면 현재 브랜치 diff 기준]
 - `$ARGUMENTS` 있으면 그 경로 / 없으면 `git diff main...HEAD --name-only` / 전부 비면 프로젝트 전체 종단 감사인지 되묻고 진행
 
 ## 2. 에이전트 호출
-- `subagent_type: "structure-fitness-reviewer"`. 실패 시 `general-purpose` 재호출, 앞머리:
-  > You are running as `structure-fitness-reviewer`. Read the plugin's `agents/structure-fitness-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
+- `subagent_type: "react-supabase-harness:structure-fitness-reviewer"`. 실패 시 `general-purpose` 재호출, 앞머리:
+  > You are running as `structure-fitness-reviewer`. Read the plugin's `${CLAUDE_PLUGIN_ROOT}/agents/structure-fitness-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
 
 ## 3. 출력
 - 에이전트 리포트를 **그대로** 노출. 재가공 금지(결함 원장 포함).

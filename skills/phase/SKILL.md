@@ -5,11 +5,11 @@ disable-model-invocation: true
 argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-seq> <slug>
 ---
 
-`planner` 에 3-tier(Phase → Epic → Story) plan 작성·갱신 위임. `docs/PLANNING.md`(plan 포맷)·`docs/RULES.md`(계획 규칙) 기준. Plan → Epic Issue → Story Issue 일괄 → feature 브랜치 진입점.
+`planner` 에 3-tier(Phase → Epic → Story) plan 작성·갱신 위임. `${CLAUDE_PLUGIN_ROOT}/docs/PLANNING.md`(plan 포맷)·`${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(계획 규칙) 기준. Plan → Epic Issue → Story Issue 일괄 → feature 브랜치 진입점.
 
 ## 1. 모드 / 경로
 - **Phase 0 (도메인·IA)**: `/phase 0 [slug]` → `docs/plans/phase-0-domain.md`. 코드·스키마 전 적합성 산출물(스토리맵·워크플로우·화면IA·가정표 — `PLANNING.md` Phase 0 4블록). **greenfield 면 `docs/plans/phase-0-domain-dossier.md` 존재 확인 — 없으면 `/domain-research` 먼저 권고**(사용자가 스킵을 승인하면 진행하되 가정 표 첫 행에 `도시에 부재` 명시). 작성 후 **`/review-structure` FIT 판정 권고** → Phase 1 진입.
-  - **파이프라인 실전 평가 T0 (greenfield 마무리 시)**: FIT 판정 후, `docs/plans/pipeline-eval.template.md` 를 `pipeline-eval.md` 로 인스턴스화하고 **T0 베이스라인**(표면화된 결정 수·가정 수·FIT 대조가 잡은 누락·팬아웃 비용)을 기록한다. 이건 상류 파이프라인이 실전에서 검증되도록 하는 종단 캡처의 1단(2단 T1 = prod-readiness). 파이프라인 자체가 실전 0런이라 이 데이터가 하네스 축5 재채점 근거가 된다. update 모드·비-greenfield 는 생략.
+  - **파이프라인 실전 평가 T0 (greenfield 마무리 시)**: FIT 판정 후, `docs/plans/pipeline-eval.template.md` 를 `pipeline-eval.md` 로 인스턴스화하고 **T0 베이스라인**(표면화된 결정 수·가정 수·FIT 대조가 잡은 누락·팬아웃 비용)을 기록한다. 이건 상류 파이프라인이 실전에서 검증되도록 하는 종단 캡처의 1단(2단 T1 = prod-readiness). update 모드·비-greenfield 는 생략.
 - **Phase**: `/phase <n> [slug]` → `docs/plans/phase-<n>-<slug>.md`. slug 미지정 시 기존 `phase-<n>-*.md` 탐색(정확히 1개=갱신, 0개=에러, 2+=slug 요구).
 - **Epic**: `/phase <n> epic <seq> <slug>` → `docs/plans/phase-<n>-epic-<seq>-<slug>.md`. (~80줄 cap, 큰 흐름·Story 분할만). 상위 Phase plan 존재 전제.
 - **Story**: `/phase <n> epic <seq> story <story-seq> <slug>` → `...-story-<story-seq>-<slug>.md`. (1 PR 단위 세부 Acceptance + 수동 회귀). 상위 Epic plan 전제. **Single-Story Epic 도 분리 필수.**
@@ -23,7 +23,7 @@ planner 는 서브에이전트라 사용자와 대화형 루프가 불가능하�
 - update 모드는 보통 생략 가능. **Phase 0(greenfield)은 인터뷰 필수** — 최소 입력(배경·목표·디자인 방향)일수록 도메인 미지가 최대인 지점이 여기다. 도시에 §5(설계 갈림길)를 질문 재료로 쓰면 각 질문에 "레퍼런스 A는 X, B는 Y" 를 병기할 수 있어 오너가 도메인 비전문이어도 답할 수 있다. 미답 항목은 planner 가 가정 표에 기록.
 
 ## 3. 에이전트 호출
-- `subagent_type: "planner"` 로 Agent 1회. 프롬프트: `대상 파일: <경로> / 모드: create|update / Tier: Phase|Epic|Story / Phase:<n>[,Epic:<seq>][,Story:<story-seq>] / slug:<slug>. PLANNING.md 의 해당 tier 필수 섹션 준수. agents/planner.md 스펙 전체 따름.` + (§2 수행 시) `인터뷰 결과 Decision Register 초안: <표>`
+- `subagent_type: "react-supabase-harness:planner"` 로 Agent 1회. 프롬프트: `대상 파일: <경로> / 모드: create|update / Tier: Phase|Epic|Story / Phase:<n>[,Epic:<seq>][,Story:<story-seq>] / slug:<slug>. PLANNING.md 의 해당 tier 필수 섹션 준수. ${CLAUDE_PLUGIN_ROOT}/agents/planner.md 스펙 전체 따름.` + (§2 수행 시) `인터뷰 결과 Decision Register 초안: <표>`
 - not found 시 `general-purpose` 재호출(앞머리에 planner.md 를 시스템 프롬프트로 읽으라 지시).
 - plan 파일 Write 는 planner 가 수행. 메인 세션은 요약 1줄: `✓ <path> (<N> slices|stories) [created|updated]`.
 

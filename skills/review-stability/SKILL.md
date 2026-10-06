@@ -16,8 +16,8 @@ argument-hint: [경로 | 비우면 현재 브랜치 diff 기준]
 - 전부 비면 되묻고 종료
 
 ## 2. 에이전트 호출
-- `subagent_type: "stability-reviewer"`. 실패 시 `general-purpose` 재호출, 앞머리:
-  > You are running as `stability-reviewer`. Read the plugin's `agents/stability-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
+- `subagent_type: "react-supabase-harness:stability-reviewer"`. 실패 시 `general-purpose` 재호출, 앞머리:
+  > You are running as `stability-reviewer`. Read the plugin's `${CLAUDE_PLUGIN_ROOT}/agents/stability-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
 
 ## 3. 출력
 - 에이전트 리포트를 **그대로** 노출. 재가공 금지(결함 원장 포함).

@@ -6,7 +6,7 @@ allowed-tools: Bash(gh *), Bash(git *), Bash(jq *)
 argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo]
 ---
 
-`react-supabase-stack` 템플릿으로 스캐폴드한 프로젝트의 **GitHub 측 셋업**을 표준화한다. 파일 치환·`pnpm install`·`.env.local`·`supabase link`는 템플릿 `scripts/setup.sh` 담당(이 스킬은 안 함). 이 스킬은 **gh 오케스트레이션 + `/commit` 승인 게이트 재사용**만. `allowed-tools`에 Write·`sed` 없음 → 템플릿 파일·secrets를 건드릴 수 없다.
+하네스 스택 구조(README「설치 전에」)로 스캐폴드한 프로젝트의 **GitHub 측 셋업**을 표준화한다. 파일 치환·`pnpm install`·`.env.local`·`supabase link`는 스캐폴드 단계(템플릿을 쓰면 그 setup 스크립트) 담당이고 이 스킬은 안 한다. 이 스킬은 **gh 오케스트레이션 + `/commit` 승인 게이트 재사용**만. `allowed-tools`에 Write·`sed` 없음 → 템플릿 파일·secrets를 건드릴 수 없다.
 
 ## 1. 인자 파싱
 - `$ARGUMENTS[0]` = **repo-slug**(필수, kebab-case)
@@ -41,17 +41,19 @@ argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo
      --enable-merge-commit=false --enable-rebase-merge=false --delete-branch-on-merge
    ```
 5. **브랜치 보호**(best-effort): `gh api -X PUT repos/$OWNER/$REPO/branches/main/protection ...` 시도. **403이면 경고만 하고 계속**(무료 private는 classic protection 불가 — `block-destructive-git` 훅 + `/branch`·`/pr` 규약이 대체).
-6. **초기 커밋 — `/commit` 스킬에 위임**(이 스킬은 `CLAUDE_COMMIT_APPROVED=1` 를 **직접 emit하지 않는다** — prefix 단일-issuer = `/commit`):
-   - `/commit` 실행 → 스테이징 목록(`.env*` 제외)·메시지(`chore: bootstrap <slug> from react-supabase-stack`)·사용자 승인·커밋을 `/commit` 이 전담.
-   - 커밋 후 `git push -u origin main` (git 은 allowed-tools).
+6. **초기 커밋 — 사용자가 `/commit` 을 실행하도록 안내하고 여기서 멈춘다.** `/commit` 은
+   `disable-model-invocation: true` 라 모델이 대신 부를 수 없고, 이 스킬은 `CLAUDE_COMMIT_APPROVED=1` 을
+   **직접 emit하지 않는다**(prefix 단일-issuer = `/commit`).
+   - 안내 문구: 스테이징 후보(`.env*` 제외)와 메시지 초안(`chore: bootstrap <slug>`)을 보여 주고 "`/commit` 을 실행해 주세요".
+   - 사용자가 커밋을 마친 뒤 이어서 `git push -u origin main`.
    - 이미 커밋/푸시돼 있으면 skip.
-7. **초기 plan은 별도** — 이 스킬은 GitHub 셋업 전용. 첫 Phase plan 은 부트스트랩 후 `/phase 1 <slug>`(planner)로 작성한다(책임 분리 — 이 스킬은 파일·서브에이전트를 다루지 않음).
+7. **초기 plan은 별도** — 이 스킬은 GitHub 셋업 전용. 부트스트랩 후 `/phase 0 <slug>`(도메인·IA 게이트)부터 밟는다 — `/phase 1` 로 바로 가면 structure-fitness 의 FIT 판정이 통째로 빠진다(책임 분리 — 이 스킬은 파일·서브에이전트를 다루지 않음).
 
 ## 4. 출력
-`✓ <owner>/<slug> — repo <created|exists> · N labels · M milestones · squash-only · push <done|skip>` + 다음 힌트 `→ supabase start && pnpm gen:types → /phase 1 <slug>`.
+`✓ <owner>/<slug> — repo <created|exists> · N labels · M milestones · squash-only · push <done|skip>` + 다음 힌트 `→ supabase start && pnpm gen:types → /phase 0 <slug>`.
 
 ## 5. 금지
 - `.env*`·secrets 스테이징(초기 커밋에서 명시 제외) · `git add .`/`-A` · `CLAUDE_COMMIT_APPROVED=1` 을 `/commit` 외 맥락에서 재사용 · 사용자 승인 없는 커밋·push · branch protection 실패 시 전체 중단(경고 후 계속) · 템플릿 파일 치환(=setup.sh 영역) · `--owner` 가 본인 외인데 권한 미확인 상태로 생성.
 
 ## 6. 후속
-`scripts/setup.sh`(치환·env) → 이 스킬(`/new-project`) → `/phase` → `/issue` → `/branch` → `/commit` → `/verify` → `/pr`. 전체 시퀀스는 `docs/BOOTSTRAP.md`.
+`scripts/setup.sh`(치환·env) → 이 스킬(`/new-project`) → `/phase` → `/issue` → `/branch` → `/commit` → `/verify` → `/pr`. 전체 시퀀스는 `${CLAUDE_PLUGIN_ROOT}/docs/BOOTSTRAP.md`.

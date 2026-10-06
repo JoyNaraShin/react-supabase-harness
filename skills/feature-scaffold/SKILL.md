@@ -6,7 +6,7 @@ allowed-tools: Bash(mkdir *), Write, Glob
 argument-hint: "<module-name> (kebab-case, 예: posts 또는 admin-metrics)"
 ---
 
-`docs/RULES.md`(FE 컨벤션) 규약대로 feature 모듈을 표준 구조로 생성한다.
+`${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(FE 컨벤션) 규약대로 feature 모듈을 표준 구조로 생성한다.
 
 **핵심 규약**: 페이지는 `src/pages/{module}/`, feature 내부 로직(api/components/hooks/types)은 `src/features/{module}/`. **features 안에 pages 폴더 두지 않는다.** `lib`=인프라 전용.
 

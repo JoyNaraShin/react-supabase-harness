@@ -1,57 +1,57 @@
 # BOOTSTRAP — 신규 프로젝트 day-1 (정본)
 
-신규 계약을 받아 **0부터 셋업하지 않고** 보일러플레이트(`react-supabase-stack`) + 이 하네스로 곧장 이슈 플로우에 진입하는 표준 절차. `/new-project` 스킬이 GitHub 측을, 템플릿 `scripts/setup.sh`가 로컬 측을 담당한다.
+새 프로젝트를 **0부터 셋업하지 않고** 이 하네스로 곧장 이슈 플로우에 진입하는 표준 절차. 하네스는 특정 템플릿 없이 동작한다 — 대상은 React + Vite + Supabase 프로젝트이고, 템플릿은 그 출발점을 빠르게 만들어 주는 선택 사항이다.
 
 ## 역할 분담
 
 | 관심사 | 담당 |
 |---|---|
-| 파일 치환(`__PROJECT_NAME__`)·식별자(name/project_id)·`pnpm install`·`.env.local`·`supabase link` | 템플릿 `scripts/setup.sh` (로컬·결정적, secrets 미트랜스크립트) |
-| `gh repo create`·3축 라벨·Phase 마일스톤·squash-only·승인게이트 초기커밋·push·(옵션)plan seed | 하네스 `/new-project` 스킬 |
+| 프로젝트 골격(Vite + Supabase + biome + `docs/plans/`) | 직접 구성하거나 자신의 템플릿(선택) |
+| 탑승 기록(`.harness.json`) | 직접 생성(아래 형식) 또는 템플릿의 셋업 스크립트 |
+| `gh repo create`·3축 라벨·Phase 마일스톤·squash-only·push | 하네스 `/new-project` 스킬 |
 
-> secrets는 `setup.sh`만 만진다(`.env.local`, git-ignored). `/new-project`는 `allowed-tools`에 파일쓰기가 없어 키를 영속화할 수 없다.
+> secrets 는 하네스가 만지지 않는다(`.env.local`, git-ignored). `/new-project` 는 `allowed-tools` 에 파일 쓰기가 없어 키를 영속화할 수 없다.
 
-## Day-1 시퀀스 (8 step)
+## Day-1 시퀀스
 
 ```
-1. gh repo create <slug> --template JoyNaraShin/react-supabase-stack --private --clone
-   (또는)  npx degit JoyNaraShin/react-supabase-stack <slug> && cd <slug> && git init
+1. 프로젝트 골격 준비
+   - 템플릿 사용: gh repo create <slug> --template <your-template> --private --clone
+   - 기존·직접 구성: Vite + React + TS, supabase/ (supabase init), biome, docs/plans/
 
-2. cd <slug> && ./scripts/setup.sh "<Project Name>" <slug>
-   → 치환 · pnpm install · .env.local 생성
-   → 프로젝트의 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 를 .env.local 에 붙여넣기
-   → (호스티드면) ./scripts/setup.sh "<Project Name>" <slug> --link=<project-ref>
+2. 탑승 기록 — 레포 루트에 .harness.json
+   {"harness": "react-supabase-harness", "version": "<설치 버전>", "role": "project", "boarded": "<YYYY-MM-DD>"}
 
 3. claude
    /plugin marketplace add JoyNaraShin/react-supabase-harness     # 글로벌 1회면 생략
-   /plugin install react-supabase-harness
+   /plugin install react-supabase-harness@react-supabase
 
 4. /new-project <slug> --private --phases=3
-   → repo 생성(degit 경로) · 라벨 · 마일스톤 · squash-only · 승인게이트 초기커밋 · push
+   → repo 생성 · 라벨 · 마일스톤 · squash-only · (사용자가 /commit 으로 초기 커밋) · push
 
 5. supabase start            # 로컬 개발  (호스티드면 link 확인)
-   pnpm gen:types            # database.types.ts 생성
+   supabase gen types --lang typescript --local > src/lib/database.types.ts
 
 6. /phase 0 <slug>           # 도메인·IA 산출물(스토리맵·워크플로우·화면IA md 1장)
    → structure-fitness-reviewer 검증(FIT) 후에만 다음. "맞는 걸 만드는가"를 스키마 전에.
-   /phase 1 <slug>           # planner plan + architect 자동검증 (스키마·화면)
+   /phase 1 <slug>           # planner plan + plan-consistency 검증 (스키마·화면)
 
 7. /issue (Epic + Story)  →  /branch  →  구현  →  /check
 
 8. /commit  →  /verify  →  /pr        # Closes #<Story> 자동, squash merge
 ```
 
-`/plugin install`이 글로벌로 끝나 있으면 step 3은 사라져 **정상상태 day-1 = 6 step**.
+`/plugin install` 이 글로벌로 끝나 있으면 step 3 은 사라진다.
 
 ## 🔴 탑승 검사 — 이 시퀀스는 사슬이다 (v0.18.0 신설)
 
 **한 고리를 놓치면 나머지가 자동으로 다 빠진다.** step 1~2를 건너뛰고 템플릿 파일만 손으로 복사해도 프로젝트는 멀쩡히 돌아간다 — 타입체크 통과하고 화면이 뜬다. **미탑승 상태와 탑승 상태가 겉으로 구분되지 않는 것**이 이 시퀀스의 구조적 약점이었다.
 
-> 2026-08-07 실측: 사용자가 "하네스 얹어서 실제 서비스처럼 진행"을 명시했는데, 세션이 8단계 중 1개(`supabase start`)만 밟고 스키마와 화면 9개를 만들었다. 대가는 **`/phase 0` 건너뛴 자리에서 화면 IA 재작업 2회**로 돌아왔다.
+> 실측: "하네스를 얹어서 진행"이 명시됐는데도 세션이 시퀀스의 한 단계(`supabase start`)만 밟고 스키마와 화면을 먼저 만들었다. 대가는 **`/phase 0` 을 건너뛴 자리에서 화면 IA 재작업**으로 돌아왔다.
 
 ### `.harness.json` — 탑승 마커
 
-`setup.sh`가 생성한다. CLAUDE.md 산문의 "하네스로 운영한다"는 세션이 안 읽으면 없는 것과 같아서, **기계 판독 가능한 기록**을 레포에 남긴다.
+위 step 2 에서 만든다(템플릿을 쓰면 템플릿의 셋업 스크립트가 만들 수 있다). CLAUDE.md 산문의 "하네스로 운영한다"는 세션이 안 읽으면 없는 것과 같아서, **기계 판독 가능한 기록**을 레포에 남긴다.
 
 | `role` | 의미 | 탑승 검사 |
 |---|---|---|
@@ -63,7 +63,7 @@
 
 ### `harness-boarding-guard` (SessionStart)
 
-세션 시작에 미탑승 지문을 적출한다. 확정 지문 = `__PROJECT_NAME__` 생존(`setup.sh` 미실행) · git 저장소 없음. 약한 지문 = 마커 없음 · 실제 plan 0개.
+세션 시작에 미탑승 지문을 적출한다. 확정 지문 = 템플릿 자리표시자 `__PROJECT_NAME__` 생존(셋업 미실행) · git 저장소 없음. 약한 지문 = 마커 없음 · 실제 plan 0개.
 
 **판단 여지가 없어 매 세션 반복한다** — `workflow-entry-guard`가 1회만 주입하는 것과 다르다(그쪽은 "한 문장 diff" 예외가 살아 있어야 하지만, 탑승은 이분법이다). 탑승하는 순간 영원히 침묵한다.
 
@@ -85,12 +85,12 @@ cp hooks/_external/plugin-drift-check.sh ~/.claude/hooks/
 
 ## 전제 / 주의
 
-- **인프라는 운영 주체 계정으로**(Supabase/Vercel/Cloudflare/Resend) — 개발자는 키를 받아 셋업·배포만. 소유권·보안 책임 분리.
+- **인프라 계정 소유권은 운영 주체에 둔다** — 개발자는 위임받은 키로 셋업·배포만. 소유권·보안 책임 분리.
 - 다른 머신에 플러그인을 얹을 땐 `gh`·`git`·`supabase`·`python3`(훅) 필요. biome 없는 레포에선 `format-on-edit` 훅이 no-op.
-- **무료 private repo**는 classic branch protection 불가 → `/new-project`는 best-effort(403 경고 후 계속). main 보호는 `block-destructive-git` 훅 + `/branch`·`/pr` 규약으로 대체.
+- GitHub 무료 플랜의 **private repo** 는 classic branch protection 불가 → `/new-project`는 best-effort(403 경고 후 계속). main 보호는 `block-destructive-git` 훅 + `/branch`·`/pr` 규약으로 대체.
 - sub-issue(`/issue --epic`)는 토큰 `repo` scope 필요 → `gh auth refresh -s repo`.
-- 버전 핀: 템플릿은 harness **≥ 0.2.0**(`/new-project` 제공) 요구. 운영 프로젝트는 marketplace head 대신 태그 핀 권장.
+- 버전 핀: 운영 프로젝트는 marketplace head 대신 태그 핀 권장.
 
 ## 관련
 - 이슈 플로우: `docs/WORKFLOW.md` · plan 계층: `docs/PLANNING.md` · 규칙: `docs/RULES.md` · 인프라: `docs/INFRA.md`
-- 템플릿: `react-supabase-stack`(별도 레포, template = canonical, 개선은 그쪽으로 백포트)
+- 템플릿(선택): 저자의 `react-supabase-stack` 은 비공개다. 자신의 템플릿을 쓰면 `__PROJECT_NAME__` 자리표시자·`docs/plans/*.template.md` 규약을 맞추면 탑승 검사가 그대로 동작한다.

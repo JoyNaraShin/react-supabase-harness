@@ -6,7 +6,7 @@ allowed-tools: Bash(gh *)
 argument-hint: <title> [--type=feat|fix|chore|docs|epic|task|bug] [--labels=<csv>] [--epic=<N>] [--body-file=<path>] [--milestone=<name>]
 ---
 
-이슈 플로우의 시작점. `docs/RULES.md`(Issue 작성 규칙) 구현.
+이슈 플로우의 시작점. `${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(Issue 작성 규칙) 구현.
 
 ## 1. 인자 파싱
 - `$ARGUMENTS[0]` = **title**(필수, `<type>(<scope>): <subject>` 권장)

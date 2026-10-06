@@ -3,19 +3,19 @@
 `planner` 에이전트와 `/phase` 스킬이 따르는 plan 포맷. 모든 plan은 `docs/plans/`.
 
 ## 계층
-- **Phase 0 (도메인·IA)** `phase-0-domain.md` — **코드·스키마 전** 적합성(fitness) 산출물. 아래 4블록을 md 1장으로. greenfield 는 **`/domain-research` 도시에(`phase-0-domain-dossier.md`) 선행**이 기본값 — 도시에 없이 쓰면 백지 발명 리스크를 가정 표에 명시. `structure-fitness-reviewer` 가 검증(FIT) 후 Phase 1 진입. 빈칸 = 템플릿 `docs/plans/*.template.md` (**react-supabase-stack 이 출하** — phase-0-domain / phase-0-domain-dossier).
+- **Phase 0 (도메인·IA)** `phase-0-domain.md` — **코드·스키마 전** 적합성(fitness) 산출물. 아래 4블록을 md 1장으로. greenfield 는 **`/domain-research` 도시에(`phase-0-domain-dossier.md`) 선행**이 기본값 — 도시에 없이 쓰면 백지 발명 리스크를 가정 표에 명시. `structure-fitness-reviewer` 가 검증(FIT) 후 Phase 1 진입. 빈칸 양식 = 프로젝트의 `docs/plans/*.template.md`(있으면). 없으면 이 문서의 블록 정의대로 쓴다.
 - **Phase** `phase-<n>-<slug>.md` — 큰 그림·모듈 구조·화면 흐름. 슬라이스 3~7개.
 - **Epic** `phase-<n>-epic-<seq>-<slug>.md` — 큰 흐름·결정·Story 분할. **~80줄 cap**. 세부는 Story 위임.
 - **Story** `phase-<n>-epic-<seq>-story-<story-seq>-<slug>.md` — **1 PR 단위** 세부 acceptance + 검증 + 롤백. Single-Story Epic도 분리.
 - **ad-hoc** `<slug>.md` — Phase plan 축소판.
 
-## Phase 0 산출물 (도메인·IA — md 1장, 3블록)
+## Phase 0 산출물 (도메인·IA — md 1장, 4블록)
 **왜**: "스키마 first·디자인 first" 룰이 있어도 *국소(테이블/화면)* first 라 전체가 안 잡혀 재설계가 반복된다. Phase 0 은 *흐름·무드* first 를 코드 전에 강제한다.
 1. **도메인 스토리맵** — 가로축 = 업무 흐름(예 신청→승인→처리→정산), 세로축 = 각 단계의 **엔티티 · 화면 · "답하는 질문"**. 모든 핵심 엔티티가 "만드는 화면 + 보는 화면"을 갖는지, 데이터가 가치까지 흐르는지 한눈에(고아 테이블·절단 사전 차단).
 2. **핵심 워크플로우 3~5개** — 사용자가 실제 일하는 순서(진입점 → 단계 → 결과 화면). "사용자의 하루"가 어디서 시작하나(대시보드 = 할 일 큐).
-3. **화면 IA** — 화면 목록 + **무드 1줄**(예 "B2B ERP = 쿨 뉴트럴, 절제·밀집"). 이게 `craft-reviewer` 디자인 렌즈의 *사전* 바가 되어 "화면 따로 놈"을 전면 정비 전에 차단.
+3. **화면 IA** — 화면 목록 + **무드 1줄**(예 "업무 대시보드 = 쿨 뉴트럴, 절제·밀집"). 이게 `craft-reviewer` 디자인 렌즈의 *사전* 바가 되어 "화면 따로 놈"을 전면 정비 전에 차단.
 4. **가정 표** — `| 가정 | 근거(도시에 §n · 인터뷰 답 · 추정) | 뒤집힐 조건 |`. 인터뷰 미답 항목·도시에 공백·planner 추정을 **전부** 여기 명시(침묵 가정 금지 — 중반 갈아엎기의 근원). 도시에 부재 시 첫 행 = `도시에 부재 — 백지 발명 리스크`.
-- **상한**: md 1장. 이벤트스토밍 풀세션·DDD 컨텍스트맵 = 소규모 프로젝트엔 과설계(대상 규모에 따라 조정).
+- **상한**: md 1장. 이벤트스토밍 풀세션·DDD 컨텍스트맵 = 소규모 프로젝트엔 과설계라 금지(대상 규모가 크면 예외로 명시).
 - **게이트**: `structure-fitness-reviewer` 적합성 렌즈(종단·폐곡선·이중입력·가치·중복) FIT 판정 후 Phase 1.
 
 ## Decision Register (휘발성 결정 — Slices **위에** 강제)
@@ -54,8 +54,8 @@
 ## Epic plan 섹션 (7, ~80줄)
 1 상위 Phase plan 링크 / 2 큰 흐름(3~6) / 3 Epic-level 결정(표: 항목·결정·검토한 대안·뒤집힐 조건 — 휘발성 우선) / 4 Story 분할(표: 제목·Plan·Issue) / 5 검증(Epic-level) / 6 머지 후 follow-up / 7 롤백(요약).
 
-## Story plan 섹션 (5)
-1 범위+의존(1 PR·커밋 경계·Issue#→Epic# sub-issue) / 2 Acceptance(파일별: DB / 데이터 레이어 / 컴포넌트) / 3 검증 게이트(pnpm typecheck/check/build · (DB) supabase db reset · 수동 회귀 시나리오[데이터+step+예상] · /review-structure Critical 0 + Major 0 · (선택) /review-stability) / 4 1주 self-check(예상 파일·커밋·LOC·블로커·리스크·소요) / 5 롤백(코드 git revert · DB rollback SQL · 후속 의존).
+## Story plan 섹션 (6)
+1 범위+의존(1 PR·커밋 경계·Issue#→Epic# sub-issue) / 2 Acceptance(파일별: DB / 데이터 레이어 / 컴포넌트) / 3 검증 게이트(pnpm typecheck/check/build · (DB) supabase db reset · 수동 회귀 시나리오[데이터+step+예상] · 변경 성격 매칭 렌즈 `/review-*` Critical 0 + Major 0 (1개 — RULES §3)) / 4 1주 self-check(예상 파일·커밋·LOC·블로커·리스크·소요) / 5 롤백(코드 git revert · DB rollback SQL · 후속 의존) / 6 진행 상태(체크리스트).
 
 ## 데이터 접근 컨벤션
 - **TanStack Query + query key factory**(feature별): `{ all, lists, list(filter), detail(id) }`. mutation → `invalidateQueries`.

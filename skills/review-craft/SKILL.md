@@ -20,8 +20,8 @@ argument-hint: [경로 | 비우면 현재 브랜치 diff 기준]
 - 캡처 불가(서버·브라우저 부재) 시 생략 — 에이전트가 "코드-only·신뢰도 낮음"을 Summary 에 명시하는 것으로 폴백.
 
 ## 3. 에이전트 호출
-- `subagent_type: "craft-reviewer"`. 프롬프트에 (§2 수행 시) `렌더 스크린샷: <경로들> / 무드 바: <1줄>` 포함. 실패 시 `general-purpose` 재호출, 앞머리:
-  > You are running as `craft-reviewer`. Read the plugin's `agents/craft-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
+- `subagent_type: "react-supabase-harness:craft-reviewer"`. 프롬프트에 (§2 수행 시) `렌더 스크린샷: <경로들> / 무드 바: <1줄>` 포함. 실패 시 `general-purpose` 재호출, 앞머리:
+  > You are running as `craft-reviewer`. Read the plugin's `${CLAUDE_PLUGIN_ROOT}/agents/craft-reviewer.md` in full and treat it as your system prompt. Follow the spec exactly.
 
 ## 4. 출력
 - 에이전트 리포트를 **그대로** 노출. 재가공 금지(결함 원장 포함).
