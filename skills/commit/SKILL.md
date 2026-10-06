@@ -1,6 +1,6 @@
 ---
 name: commit
-description: 커밋 생성 — git status/diff 분석 → 메시지 제안 → 사용자 명시 승인 → 실행. 파괴적-git 차단 훅을 합법 우회하는 유일 경로.
+description: git status/diff 를 분석해 커밋 메시지를 제안하고, 사용자의 명시 승인을 받은 뒤 커밋한다. 파괴적 git 차단 훅을 합법적으로 지나는 유일한 경로라 모든 커밋에 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(git *)
 ---

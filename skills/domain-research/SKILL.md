@@ -1,9 +1,9 @@
 ---
 name: domain-research
-description: 도메인 도시에(dossier) 생성 — greenfield 프로젝트에서 Phase 0 이전에 성숙 SaaS teardown·엣지 규칙·용어를 리서치해 "백지 설계"를 "대조 설계"로 바꾼다. 오너가 도메인 비전문 영역이라도 초기 구조를 리뷰 가능하게 만드는 상류 장치.
+description: 성숙 SaaS teardown·엣지 규칙·용어를 리서치해 도메인 도시에를 만든다. greenfield 프로젝트에서 Phase 0 전에, 특히 오너가 비전문인 도메인에서 백지 설계 대신 대조 설계를 하려고 쓴다.
 disable-model-invocation: true
 allowed-tools: Agent, Read, Write, Glob, Grep, WebSearch, WebFetch, AskUserQuestion
-argument-hint: <버티컬/제품 한 줄 설명> (예: "필라테스 스튜디오 회원·수강권 관리")
+argument-hint: '<버티컬/제품 한 줄 설명> (예: "필라테스 스튜디오 회원·수강권 관리")'
 ---
 
 신규 프로젝트의 **`/phase 0` 이전** 단계. 산출물 = `docs/plans/phase-0-domain-dossier.md` (도메인 도시에, md 1~2장 상한).
@@ -16,7 +16,7 @@ argument-hint: <버티컬/제품 한 줄 설명> (예: "필라테스 스튜디�
 - 자료가 없으면 도시에에 `기존 자료: 없음(순수 신규)` 명시 — 침묵 생략 금지.
 
 ## 1. 리서치 fan-out (병렬 서브에이전트 3~4개)
-`general-purpose` 에이전트를 병렬 스폰(각자 WebSearch/WebFetch 자기 수행, 출처 필수):
+`general-purpose` 에이전트를 병렬 스폰(각자 WebSearch/WebFetch 자기 수행, 출처 필수). 프롬프트마다 `결과를 <scratchpad>/r1-teardown.md 에 섹션마다 저장하고 경로만 보고하라`(R2~R4 도 같은 꼴, 파일명은 REPORT·SUMMARY·FINDINGS·ANALYSIS 로 시작하지 않게) 를 넣는다 — 한도로 끊겨도 결과가 남는다:
 - **R1 레퍼런스 teardown**: 이 버티컬의 성숙 SaaS **2~3개**(글로벌 1+·대상 시장 로컬 1+ 권장)의 기능 목록·화면 구성·용어를 실측. 각각의 **엔티티 모델을 역추정**(무엇을 테이블로 갖는가).
 - **R2 워크플로우·엣지 규칙**: 실제 운영자의 하루(진입점→단계→결과)와 **엣지 규칙 전수**(환불·정지·노쇼·재등록·할인·정산 등 — *중반 갈아엎기의 단골 원인*). 커뮤니티·리뷰·블로그의 실무 불만도 수집.
 - **R3 대상 시장 로컬**: 그 시장의 관행·용어·규제(정산·세금 증빙·개인정보), 현지 경쟁 서비스와 가격대.

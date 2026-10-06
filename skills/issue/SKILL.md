@@ -1,6 +1,6 @@
 ---
 name: issue
-description: GitHub Issue 생성 — gh issue create 래퍼. Conventional Commits title 자동 해석 + Epic sub-issue 링크(GraphQL).
+description: gh issue create 를 감싸 Conventional Commits title 에서 type 라벨을 붙이고 Epic sub-issue 관계(GraphQL)를 건다. plan 의 Epic·Story 를 Issue 로 옮길 때 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(gh *)
 argument-hint: <title> [--type=feat|fix|chore|docs|epic|task|bug] [--labels=<csv>] [--epic=<N>] [--body-file=<path>] [--milestone=<name>]

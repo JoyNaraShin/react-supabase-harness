@@ -1,8 +1,8 @@
 ---
 name: check
-description: 상시 검증 — verifier 서브에이전트에 위임 (typecheck + check 기본). 작업 중 자주 사용.
+description: verifier 서브에이전트에 typecheck + check(기본)를 위임해 결과만 받는다. 작업 중간에 자주 쓰는 상시 검증이다(최종 게이트는 /verify).
 disable-model-invocation: true
-argument-hint: [typecheck-only | check-only | build-only]
+argument-hint: '[typecheck-only | check-only | build-only]'
 ---
 
 `verifier` 서브에이전트에 검증 위임. 작업 중간 상시용 (`/verify` 는 최종 게이트).
@@ -14,7 +14,7 @@ argument-hint: [typecheck-only | check-only | build-only]
 ## 2. 에이전트 호출
 - `subagent_type: "react-supabase-harness:verifier"` 로 Agent 1회 호출. 프롬프트: `모드: <확정>. 대상: 전체 프로젝트. ${CLAUDE_PLUGIN_ROOT}/agents/verifier.md 스펙 준수.`
 - `Agent type 'verifier' not found` 시 `general-purpose` 재호출, 앞머리에:
-  > You are running as `verifier`. Read the plugin's `${CLAUDE_PLUGIN_ROOT}/agents/verifier.md` in full and treat it as your system prompt. Mode: `<확정>`.
+  > You are running as `verifier`. Read the plugin's `${CLAUDE_PLUGIN_ROOT}/agents/verifier.md` in full and treat it as your system prompt. Mode: `<확정>`. Save your full report to `<scratchpad>/verifier-ledger.md` section by section as you go, then reply with the path and the summary table.
 
 ## 3. 출력
 - 에이전트 리포트(`## Verify Report ... ## Verdict`)를 **그대로** 노출. 재가공·서문·맺음말 금지. `## Verdict` 본문은 `PASS`/`FAIL` 단일 토큰.

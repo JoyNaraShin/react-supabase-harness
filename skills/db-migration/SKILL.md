@@ -1,6 +1,6 @@
 ---
 name: db-migration
-description: Supabase 마이그레이션 생성 (supabase/migrations/<14자리 타임스탬프>_<slug>.sql — `supabase migration new` 로 만든다) — rollback 주석 + RLS enable + 정책 스켈레톤. 이후 타입 재생성 안내. 수동 호출 전용 슬래시 명령(/db-migration <slug>).
+description: Supabase CLI(`supabase migration new`)로 14자리 타임스탬프 마이그레이션을 만들고 rollback 주석·RLS enable·정책 스켈레톤을 채운 뒤 타입 재생성을 안내한다. 스키마를 바꿀 때 쓴다(/db-migration <slug>).
 disable-model-invocation: true
 allowed-tools: Bash(supabase migration new *), Read, Write, Glob
 argument-hint: "<slug> (snake_case, 예: add_posts_table)"
@@ -8,11 +8,13 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
 
 `${CLAUDE_PLUGIN_ROOT}/docs/INFRA.md`(Migration Safety) 규약에 맞춰 마이그레이션을 생성한다.
 
-## Workflow
+## 1. 준비 — 입력 검증·중복 체크·파일 생성
 1. **입력 검증**: `$ARGUMENTS` 가 snake_case 인지 확인(kebab·space·대문자 시 에러).
 2. **중복 체크**: `supabase/migrations/*_<slug>.sql` 이 이미 있으면 경고 후 종료.
 3. **빈 파일 생성**: `supabase migration new <slug>` — CLI 가 `<YYYYMMDDHHMMSS>_<slug>.sql`(UTC 14자리)을 만든다.
    파일명을 손으로 짓지 않는다: 버전은 이 타임스탬프이고, 날짜만 쓰면 같은 날 두 마이그가 같은 버전으로 충돌한다.
+
+## 2. 내용 작성
 4. **내용 작성** — 만들어진 파일에 아래 헤더 컨벤션으로 쓴다:
    ```sql
    -- Phase: <plan 링크 / 무엇을 왜>
@@ -47,7 +49,7 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      grant execute on function public.<name>(<인자타입…>) to authenticated, service_role;
      ```
      검증은 `proacl` 문자열 패턴이 아니라 `has_function_privilege('anon', '<sig>', 'EXECUTE')` 로.
-   - **표를 새로 만들면 Data API grant 경로 확인** — 맨 앞 마이그에 `alter default privileges in schema public … on tables` 가 없으면 이 마이그에 표별 `grant select, insert, update, delete on public.<name> to authenticated;`(+ `anon`/`service_role` 필요분) 을 같이 쓴다. 2026-10-30 부터 자동 grant 가 없어 안 쓰면 그 표만 조용히 403.
+   - **표를 새로 만들면 Data API grant 경로 확인** — 맨 앞 마이그에 `alter default privileges in schema public … on tables` 가 없으면 이 마이그에 표별 `grant select, insert, update, delete on public.<name> to authenticated;`(+ `anon`/`service_role` 필요분) 을 같이 쓴다. 자동 grant 가 없으므로(INFRA.md) 안 쓰면 그 표만 조용히 403.
    - 🔴 **그 `alter default privileges` 가 있으면 반대 방향 사고가 난다 — 신규 표는 authenticated 에도 `ALL` 이 자동으로 붙는다.** `revoke all … from public, anon` 만 쓰면 **DELETE 가 남는다.** 그리고 **DELETE 정책이 없어도 RLS 는 에러를 내지 않는다 — 0행을 조용히 지운다**(화면은 "지웠다"고 믿고 행은 남는다). 그래서 "정책을 안 만들었으니 막혔다" 는 추론이 두 번 틀린다.
      ```sql
      revoke all on public.<name> from public, anon, authenticated;   -- authenticated 까지
@@ -78,10 +80,12 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      가 같이 담긴다. 실측 사고: 그대로 푸시돼 수습이 **토큰 무효화 + force-push**
      였다 — 푸시된 뒤에는 파일을 지우는 것만으로 끝나지 않는다.
      🔴 **절차 문서에 주의를 적는 것으로 끝내지 말 것.** 사람이 기억해서 붙이는 플래그는
-     언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(예: `scripts/lint-sql-dump-scope.mjs` —
+     언젠가 한 번은 빠진다. 커밋 시점 게이트를 같이 둔다(예: 프로젝트에 두는 덤프 범위 lint 스크립트 — 하네스에 동봉되지 않음,
      추적 대상 `*.sql` 에서 pg_dump 의 `Schema: <public 아님>` 헤더 · auth/storage/vault 로
      들어가는 COPY·INSERT · 토큰·암호 컬럼 이름을 잡는다. 마이그레이션·pgTAP 경로는 제외하되
      시크릿 컬럼 검사만은 전수).
+
+## 3. 검증·후속
 
 5. **검증 체크리스트 출력**:
    - [ ] 테이블 생성 시 `enable row level security` + `create policy` 포함?

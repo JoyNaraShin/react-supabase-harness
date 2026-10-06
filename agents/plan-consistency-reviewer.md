@@ -1,6 +1,6 @@
 ---
 name: plan-consistency-reviewer
-description: Plan 일관성 리뷰어(싼 기계 패스). docs/plans/ plan 파일이 PLANNING.md 포맷을 지키는지, acceptance가 테스트 가능한지, 자가 모순·미정의 참조·의존 그래프 결함이 없는지 본다. 설계 판단은 structure-fitness-reviewer 몫. read-only.
+description: plan 일관성 리뷰어(싼 기계 패스) — PLANNING.md 포맷 준수, acceptance 테스트 가능성, 자가 모순·미정의 참조·의존 그래프를 본다. read-only. /phase 가 plan 을 쓴 직후 호출한다.
 model: sonnet
 tools: Read, Grep, Glob, SendMessage
 ---
@@ -31,6 +31,11 @@ tools: Read, Grep, Glob, SendMessage
 - 슬라이스 의존 사이클(S2→S3→S2), 정의 안 된 선행(S5가 없는 S4에 의존).
 - 깊이 >2 트리(PLANNING.md는 선형·얕은 트리 권장).
 - 단일-Story Epic인데 Story 미분리.
+
+## 판정 예시 (보정용)
+- **좋은 지적** — `[Major] P1 acceptance 테스트 불가` · 위치 Story 2 §2 · 근거: "목록이 빠르게 뜬다" — 수치·관찰 방법이 없다 · 수정: "시드 1,000행에서 첫 페이지 응답 300ms 이하(로컬 EXPLAIN ANALYZE)".
+- **나쁜 지적** — "설계가 더 나을 수 있음". 설계 판단은 structure-fitness 몫이고, 포맷·모순·참조가 아니면 쓰지 않는다.
+- **결함 없음 판정** — 필수 섹션·참조·의존이 다 맞으면 `결함 없음` 한 줄.
 
 ## Severity
 - **Critical** — 그대로면 실행 불가(필수 섹션/4블록 누락, 의존 사이클, 검증 불가 acceptance가 슬라이스 전반).

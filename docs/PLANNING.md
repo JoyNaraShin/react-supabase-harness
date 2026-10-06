@@ -55,7 +55,7 @@
 1 상위 Phase plan 링크 / 2 큰 흐름(3~6) / 3 Epic-level 결정(표: 항목·결정·검토한 대안·뒤집힐 조건 — 휘발성 우선) / 4 Story 분할(표: 제목·Plan·Issue) / 5 검증(Epic-level) / 6 머지 후 follow-up / 7 롤백(요약).
 
 ## Story plan 섹션 (6)
-1 범위+의존(1 PR·커밋 경계·Issue#→Epic# sub-issue) / 2 Acceptance(파일별: DB / 데이터 레이어 / 컴포넌트) / 3 검증 게이트(pnpm typecheck/check/build · (DB) supabase db reset · 수동 회귀 시나리오[데이터+step+예상] · 변경 성격 매칭 렌즈 `/review-*` Critical 0 + Major 0 (1개 — RULES §3)) / 4 1주 self-check(예상 파일·커밋·LOC·블로커·리스크·소요) / 5 롤백(코드 git revert · DB rollback SQL · 후속 의존) / 6 진행 상태(체크리스트).
+1 범위+의존(1 PR·커밋 경계·Issue#→Epic# sub-issue) / 2 Acceptance(파일별: DB / 데이터 레이어 / 컴포넌트 — 새 테이블 슬라이스면 `supabase/seed.sql` 도메인 시드 골격(대표 3~5행)을 포함해 데모·리뷰가 빈 화면이 아니게) / 3 검증 게이트(pnpm typecheck/check/build · (DB) supabase db reset · 수동 회귀 시나리오[데이터+step+예상] · 변경 성격 매칭 렌즈 `/review-*` Critical 0 + Major 0 (1개 — RULES §3)) / 4 1주 self-check(예상 파일·커밋·LOC·블로커·리스크·소요) / 5 롤백(코드 git revert · DB rollback SQL · 후속 의존) / 6 진행 상태(체크리스트).
 
 ## 데이터 접근 컨벤션
 - **TanStack Query + query key factory**(feature별): `{ all, lists, list(filter), detail(id) }`. mutation → `invalidateQueries`.

@@ -1,6 +1,6 @@
 ---
 name: new-project
-description: 신규 프로젝트 day-1 부트스트랩 — gh repo create + 3축 라벨 + Phase 마일스톤 + squash-merge 강제 + 초기커밋(/commit 위임). 전부 멱등.
+description: repo 생성·3축 라벨·Phase 마일스톤·squash-merge 강제·초기 커밋(/commit 위임)을 멱등으로 수행한다. 신규 프로젝트 day-1 에 한 번 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(gh *), Bash(git *), Bash(jq *)
 argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo]
@@ -20,13 +20,23 @@ argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo
 2. **scope 확인**: 토큰에 `repo` 없으면 경고 — `gh auth refresh -s repo`(sub-issue GraphQL·private repo 위해 필요).
 3. `git rev-parse --show-toplevel` — repo 루트 확인(아니면 중단).
 4. `git remote get-url origin 2>/dev/null` · `gh repo view --json nameWithOwner 2>/dev/null` — repo/원격 **존재 감지**(있으면 생성 단계 skip).
-5. owner 확정. `.github/labels.yml` 존재 확인(없으면 경고 — 템플릿 기반인지 확인).
+5. owner 확정. `.github/labels.yml` 존재 확인. 없으면 아래 최소 세트를 그 경로에 쓸지 사용자에게 묻는다(`/issue` 가 자동 부착하는 `type:*` 6개(feat·fix·chore·docs·task·epic)가 없으면 이슈 생성이 실패한다):
+   ```yaml
+   # .github/labels.yml — name / color(6자리 hex, # 없이) / description(선택)
+   - { name: "type:feat",  color: "1d76db", description: "기능" }
+   - { name: "type:fix",   color: "d73a4a", description: "버그 수정" }
+   - { name: "type:chore", color: "cfd3d7" }
+   - { name: "type:docs",  color: "0075ca" }
+   - { name: "type:task",  color: "c5def5" }
+   - { name: "type:epic",  color: "5319e7", description: "Epic — Story 의 부모" }
+   # 선택: area:<도메인>, phase:<n> 은 프로젝트별로 추가
+   ```
 
 ## 3. 단계 (전부 멱등 — 재실행 안전)
 1. **repo 생성**(origin 없고 `--no-repo` 아닐 때): `gh repo create <owner>/<slug> --private --source=. --remote=origin --push=false`. 이미 있으면 "exists, skip".
 2. **라벨 upsert** — `.github/labels.yml` 순회:
    ```bash
-   gh label create "<name>" --color "<color>" --force   # --force = create-or-update
+   gh label create "<name>" --color "<color>" --description "<description>" --force   # --force = create-or-update
    ```
 3. **Phase 마일스톤** — create-if-absent:
    ```bash
@@ -56,4 +66,4 @@ argument-hint: <repo-slug> [--owner=<login>] [--private] [--phases=N] [--no-repo
 - `.env*`·secrets 스테이징(초기 커밋에서 명시 제외) · `git add .`/`-A` · `CLAUDE_COMMIT_APPROVED=1` 을 `/commit` 외 맥락에서 재사용 · 사용자 승인 없는 커밋·push · branch protection 실패 시 전체 중단(경고 후 계속) · 템플릿 파일 치환(=setup.sh 영역) · `--owner` 가 본인 외인데 권한 미확인 상태로 생성.
 
 ## 6. 후속
-`scripts/setup.sh`(치환·env) → 이 스킬(`/new-project`) → `/phase` → `/issue` → `/branch` → `/commit` → `/verify` → `/pr`. 전체 시퀀스는 `${CLAUDE_PLUGIN_ROOT}/docs/BOOTSTRAP.md`.
+(템플릿을 쓰면) 템플릿의 셋업 스크립트(치환·env, 하네스에 동봉되지 않음) → 이 스킬(`/new-project`) → `/phase` → `/issue` → `/branch` → `/commit` → `/verify` → `/pr`. 전체 시퀀스는 `${CLAUDE_PLUGIN_ROOT}/docs/BOOTSTRAP.md`.

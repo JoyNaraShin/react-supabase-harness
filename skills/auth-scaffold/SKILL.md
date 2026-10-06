@@ -1,9 +1,9 @@
 ---
 name: auth-scaffold
-description: 인증 스캐폴드 결정적 생성 — profiles 마이그레이션(RLS·자동생성 트리거·is_admin) + src/features/auth(로그인·useAuth·ProtectedRoute) + 라우트 배선. 회원제 프로젝트의 반복 인프라를 매번 맨손으로 짓지 않게 한다.
+description: 인증 스캐폴드를 결정적으로 생성한다 — profiles 마이그레이션(RLS·자동생성 트리거·is_admin)과 pgTAP 테스트, src/features/auth(로그인·useAuth·ProtectedRoute), 라우트 배선. 회원제 프로젝트에서 인증을 처음 붙일 때 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(date *), Bash(supabase *), Bash(pnpm *), Write, Read, Glob, Grep
-argument-hint: [--roles admin,member(기본) | --oauth google 등 추가 옵션]
+argument-hint: '[--roles admin,member(기본) | --oauth google 등 추가 옵션]'
 ---
 
 하네스 스택 구조의 프로젝트에 **이메일/비밀번호 인증 + 역할(profiles) 기반 인가**의 표준 골격을 생성한다. INFRA.md 인증 규약(가입 시 profiles 자동 생성 트리거 · admin 수동 부트스트랩 · **라우트 가드 ≠ 인가, RLS가 실제 인가**)과 스택 관행(`getSupabase()` 접근자 · feature 구조 · 외부 UI lib 금지)을 그대로 따른다.

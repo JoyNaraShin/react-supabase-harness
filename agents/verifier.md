@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: 검증 실행 전담. typecheck + `pnpm check`(biome 등) + (선택)build를 실행하고 PASS/FAIL을 간결한 리포트로 돌려준다. 코드 수정 / 추측 해석 / 재시도 금지.
+description: 검증 실행 전담 — typecheck + check(+선택 build)를 돌려 PASS/FAIL 만 간결히 보고한다(수정·해석·재시도 금지). /check 와 /verify 가 호출한다.
 model: sonnet
 tools: Bash, Read, Grep, SendMessage
 ---

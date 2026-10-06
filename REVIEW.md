@@ -17,11 +17,11 @@
 
 ## Do not report
 - 마크다운 line length/wrapping.
-- CI(`pnpm check`)가 이미 잡는 포맷.
+- CI(`python3 -m unittest`·`claude plugin validate`)가 이미 잡는 것.
 - 생성물·예시 코드의 사소한 스타일.
 - "이론적으로 가능한" 추상 시나리오(실제 재현 경로 없는 것).
 
-## 참고 (현행 Claude Code 스펙 기준, 2026-06)
+## 참고 (Claude Code 공식 스펙 기준)
 - PreToolUse 차단: `hookSpecificOutput.permissionDecision: "deny"` + `permissionDecisionReason`, 또는 exit code 2(stderr=메시지). 레거시 top-level `{"decision":"block"}`은 비권장.
 - 컨텍스트 주입: `hookSpecificOutput.additionalContext`(+ `hookEventName`).
 - 플러그인 에이전트 허용필드: name·description·model·tools·disallowedTools·skills·memory·background·isolation(worktree)·effort·maxTurns.

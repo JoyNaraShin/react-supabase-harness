@@ -1,6 +1,6 @@
 ---
 name: branch
-description: origin/main 기준 feature/chore/fix 브랜치 생성. Story Issue 번호 prefix 지원.
+description: 기본 브랜치(origin/HEAD) 기준으로 feat/chore/fix 브랜치를 만들고 Story Issue 번호를 prefix 로 붙인다. Issue 를 잡고 구현을 시작할 때 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(git *)
 argument-hint: <slug> [--issue=<N>] [--type=feat|chore|fix|docs|refactor]
@@ -23,7 +23,7 @@ argument-hint: <slug> [--issue=<N>] [--type=feat|chore|fix|docs|refactor]
 
 ## 3. 실행
 1. 현재 브랜치가 main 아니면 경고: `"현재 <br>에서 분기됩니다. main 기준이면 먼저 'git switch main && git pull'"`
-2. `git fetch origin main`
+2. 기본 브랜치 확인 `git symbolic-ref --short refs/remotes/origin/HEAD`(예: `origin/main`) → `git fetch origin <기본 브랜치>`
 3. 브랜치명 중복 체크 — 존재 시 에러 종료
 4. `git switch -c <branch>`(작업 트리 유지)
 5. 요약: `✓ <branch> (from <parent>, <X> commits ahead of origin/main)` + Issue 링크(있으면)

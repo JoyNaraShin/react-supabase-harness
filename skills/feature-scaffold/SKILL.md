@@ -1,6 +1,6 @@
 ---
 name: feature-scaffold
-description: 새 feature 모듈 스캐폴드 — src/features/<name>/{api,components,hooks,types.ts,index.ts} + src/pages/<name>/ 진입 페이지. 라우트는 src/routes/routes.tsx 등록 안내. 수동 호출 전용 슬래시 명령(/feature-scaffold <name>).
+description: src/features/<name>/{api,components,hooks,types.ts,index.ts} 와 src/pages/<name>/ 진입 페이지를 생성하고 라우트 등록을 안내한다. 새 기능 모듈을 시작할 때 쓴다(/feature-scaffold <name>).
 disable-model-invocation: true
 allowed-tools: Bash(mkdir *), Write, Glob
 argument-hint: "<module-name> (kebab-case, 예: posts 또는 admin-metrics)"

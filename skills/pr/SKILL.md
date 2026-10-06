@@ -1,9 +1,9 @@
 ---
 name: pr
-description: 현재 브랜치 PR open/업데이트. 브랜치명에서 Story 번호 추출 → Closes 자동. plan 경로 Refs 자동 삽입.
+description: 현재 브랜치의 PR 을 열거나 갱신하고, 브랜치명에서 Story 번호를 뽑아 Closes 와 plan Refs 를 넣는다. 슬라이스 구현과 /verify 를 마친 뒤 쓴다.
 disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *)
-argument-hint: [--draft] [--no-close] [--title=<t>] [--body-file=<path>]
+argument-hint: '[--draft] [--no-close] [--title=<t>] [--body-file=<path>]'
 ---
 
 `${CLAUDE_PLUGIN_ROOT}/docs/RULES.md`(PR 규칙) 구현. Story PR 표준화.
@@ -11,7 +11,7 @@ argument-hint: [--draft] [--no-close] [--title=<t>] [--body-file=<path>]
 ## 1. 상태 수집 (병렬)
 - `git rev-parse --abbrev-ref HEAD` → 현재 브랜치
 - 브랜치명 `(feat|fix|chore|docs|refactor)/(?<issue>\d+)?-?(?<slug>.*)` → Story 번호 추출(없으면 null)
-- `git log origin/main..HEAD --oneline` · `git diff origin/main..HEAD --stat`
+- 기본 브랜치 `B=$(git symbolic-ref --short refs/remotes/origin/HEAD)` → `git log $B..HEAD --oneline` · `git diff $B..HEAD --stat`
 - `gh pr list --head <branch> --json number,url` → 기존 PR 여부
 
 ## 2. 사전 체크

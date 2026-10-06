@@ -1,6 +1,6 @@
 ---
 name: prod-readiness
-description: 실서비스 출시 가능성 게이트 — 코드가 아니라 "서비스로 띄울 수 있는가"를 검사. dev DB 공유·도메인·백업·에러추적·테스트·리뷰 게이트·핸드오프를 PASS/BLOCK 체크리스트로 판정. 수동 호출 전용(/prod-readiness [commercial|demo]). 배포·핸드오프 직전 사용.
+description: 코드가 아니라 서비스로 띄울 수 있는지(dev DB 공유·도메인·백업·에러 추적·테스트·리뷰 게이트·핸드오프)를 PASS/BLOCK 체크리스트로 판정한다. 배포·핸드오프 직전에 쓴다(/prod-readiness [commercial|demo]).
 disable-model-invocation: true
 argument-hint: "[commercial | demo] (기본 commercial)"
 allowed-tools: Read, Glob, Grep, Bash(git *), Bash(grep *), Bash(cat *)
