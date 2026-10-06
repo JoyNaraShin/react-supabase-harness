@@ -5,6 +5,7 @@
 
 실행:  python3 -m unittest discover -s tests -v      (의존성 없음 — 표준 라이브러리만)
 """
+from __future__ import annotations
 import importlib.util
 import json
 import os
@@ -45,6 +46,10 @@ def denied(out) -> bool:
 
 def reason(out) -> str:
     return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def context(out) -> str:
+    return out["hookSpecificOutput"]["additionalContext"]
 
 
 def blocked(out) -> bool:
@@ -146,6 +151,16 @@ class GateEngineTest(unittest.TestCase):
             "file_path": str(self.proj / "src" / "App.tsx"), "content": "export {}"}})
         self.assertIsNone(out)
 
+    def test_plan_template_alone_is_not_a_plan(self):
+        # 템플릿으로 시작한 프로젝트는 docs/plans/*.template.md 를 갖고 태어난다 — 그걸 플랜으로 세면
+        # 게이트가 첫날부터 죽는다. 세 훅(gate-engine·workflow-entry·boarding)의 플랜 정의가 같아야 한다.
+        (self.proj / "docs" / "plans").mkdir(parents=True)
+        (self.proj / "docs" / "plans" / "story.template.md").write_text("# template")
+        out = self.gate({"tool_name": "Write", "tool_input": {
+            "file_path": str(self.proj / "src" / "App.tsx"), "content": "export {}"}})
+        self.assertTrue(denied(out))
+        self.assertNotIn("잘게 쪼갠다", reason(out))
+
     def test_non_target_project_passes(self):
         (self.proj / "supabase").rmdir()  # 하네스 구조도 Supabase 도 없는 단발 프로토타입
         out = self.gate({"tool_name": "Write", "tool_input": {
@@ -180,9 +195,51 @@ class GateEngineTest(unittest.TestCase):
     def test_garbage_stdin_is_silent(self):
         self.assertIsNone(self.gate("not json"))
 
+    # 자기 보호 — 막힌 에이전트가 탈출구·룰 파일을 스스로 바꾸지 못한다
+    def test_agent_cannot_open_its_own_escape_hatch(self):
+        for payload in [
+            {"tool_name": "Bash", "tool_input": {"command": "touch .claude/state/ui-lib-gate-off"}},
+            {"tool_name": "Bash", "tool_input": {"command": "echo '{}' > .claude/gates/rules.jsonc"}},
+            {"tool_name": "Write", "tool_input": {"file_path": str(self.proj / ".claude/gates/rules.jsonc"),
+                                                  "content": "{}"}},
+            {"tool_name": "Edit", "tool_input": {"file_path": str(self.proj / ".claude/state/plan-gate-off"),
+                                                 "new_string": ""}},
+        ]:
+            with self.subTest(p=payload):
+                self.assertTrue(denied(self.gate(payload)))
+
+    def test_reading_gate_files_and_other_state_passes(self):
+        self.assertIsNone(self.bash("cat .claude/gates/rules.jsonc"))
+        self.assertIsNone(self.bash("ls .claude/state"))
+        self.assertIsNone(self.gate({"tool_name": "Write", "tool_input": {
+            "file_path": str(self.proj / ".claude/state/edit-count.json"), "content": "{}"}}))
+
+    def test_self_protection_boundary(self):
+        # 독립 재검증: 디렉터리 탈출구 · settings env · 읽기 오탐 · 경로 정규화
+        (self.proj / ".claude" / "state" / "ui-lib-gate-off").mkdir(parents=True)
+        self.assertTrue(denied(self.bash("pnpm add antd")))  # 디렉터리는 탈출구가 아니다
+        for payload in [
+            {"tool_name": "Bash", "tool_input": {"command": "mkdir -p .claude/state/plan-gate-off"}},
+            {"tool_name": "Bash", "tool_input": {"command": "git checkout -- .claude/gates/rules.jsonc"}},
+            {"tool_name": "Write", "tool_input": {
+                "file_path": str(self.proj / ".claude/../.claude/gates/rules.jsonc"), "content": "{}"}},
+            {"tool_name": "Edit", "tool_input": {"file_path": str(self.proj / ".claude/settings.local.json"),
+                                                 "new_string": '"HARNESS_GATE_UI_LIB_GATE_OFF": "off"'}},
+        ]:
+            with self.subTest(p=payload):
+                self.assertTrue(denied(self.gate(payload)))
+        for c in ["ls .claude/state/*gate-off 2>/dev/null", "cat .claude/gates/rules.jsonc 2>&1",
+                  "git status > /tmp/s.txt"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.bash(c))
+
+    def test_deny_message_does_not_tell_agent_to_touch_hatch(self):
+        out = self.bash("pnpm add antd")
+        self.assertNotIn("touch", reason(out))
+
 
 class StripJsoncTest(unittest.TestCase):
-    """2026-08-17 실측 버그 회귀: 정규식으로 주석을 벗기면 문자열 안 glob 이 지워졌다."""
+    """실측 버그 회귀: 정규식으로 주석을 벗기면 문자열 안 glob 이 지워졌다."""
 
     def setUp(self):
         self.strip = load_module("gate-engine.py").strip_jsonc
@@ -208,7 +265,7 @@ class DestructiveGitTest(unittest.TestCase):
 
     def test_destructive_commands_denied(self):
         for c in ["git push --force", "git push origin :main", "git reset --hard HEAD~1",
-                  "rm -fr /tmp/x", "rm -rf ~/cache", "rm -r -f ../up", "git commit -m x", "git -C . commit -m x",
+                  "rm -fr /usr/local", "rm -rf ~/cache", "rm -r -f ../up", "git commit -m x", "git -C . commit -m x",
                   'bash -c "git reset --hard"', "ls && git clean -fd"]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
@@ -222,6 +279,80 @@ class DestructiveGitTest(unittest.TestCase):
     def test_approved_commit_bypasses_commit_only(self):
         self.assertIsNone(self.check("CLAUDE_COMMIT_APPROVED=1 git commit -m x"))
         self.assertTrue(denied(self.check("CLAUDE_COMMIT_APPROVED=1 git push --force")))
+
+    def test_launcher_prefixes_and_alternate_forms_denied(self):
+        # 접두어·절대경로·대체 플래그로 통과하던 12건 + 변형
+        for c in ["env git commit -m x", "command git commit -m x", "/usr/bin/git commit -m x",
+                  "sudo rm -rf /", "nohup git push --force", "time git reset --hard",
+                  "git push --delete origin main", "git push -fu origin main", "git push --mirror",
+                  "git checkout .", "xargs rm -rf /", "find / -delete",
+                  "sudo -u root env FOO=1 git push -f", "timeout 5 git reset --hard",
+                  "builtin command git reset --hard", "git stash clear", "rm -rf .",
+                  "git switch --discard-changes main", "find ~ -exec rm {} +"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
+    def test_routine_commands_still_pass(self):
+        for c in ["git push --force-with-lease=master:abc origin master", "git push -u origin dev",
+                  "rm -fr node_modules/.cache", "find . -name '*.pyc'", "find build -delete",
+                  "git checkout main", "git checkout -b feat/x", "git stash list", "env | sort",
+                  "time pnpm test"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+
+    def test_heredoc_body_is_data_unless_a_shell_reads_it(self):
+        # 산문 속 "(git push --force)" 를 명령으로 오판하던 오탐
+        self.assertIsNone(self.check("cat > notes.md <<'EOF'\n규칙 (git push --force 금지)\nEOF"))
+        self.assertIsNone(self.check(
+            "CLAUDE_COMMIT_APPROVED=1 git commit -F - <<'EOF'\nfix: (git reset --hard) 차단\nEOF"))
+        self.assertTrue(denied(self.check("bash <<EOF\ngit push --force origin main\nEOF")))
+        self.assertTrue(denied(self.check("cat <<EOF | sh\ngit reset --hard\nEOF")))
+
+    # 독립 재검증에서 나온 우회·오탐 회귀
+    def test_every_line_of_a_multiline_command_is_checked(self):
+        # 개행이 공백으로 먹혀 둘째 줄 이후가 미검사였다
+        for c in ["ls\ngit reset --hard", "# it's a comment\ngit reset --hard",
+                  "CLAUDE_COMMIT_APPROVED=1 git commit -m x\ngit push --force origin main",
+                  "echo a \\\n && git clean -fd"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
+    def test_standard_approved_commit_heredoc_passes(self):
+        # `-m "$(cat <<'EOF' …)"` 본문은 cat 이 받는다(셸 아님)
+        msg = "fix: don't allow git push --force here\n\nCo-Authored-By: x"
+        self.assertIsNone(self.check(
+            "CLAUDE_COMMIT_APPROVED=1 git commit -m \"$(cat <<'EOF'\n" + msg + "\nEOF\n)\""))
+
+    def test_commands_inside_shell_compound_statements_are_checked(self):
+        # do/then/{ 뒤 명령
+        for c in ['git branch | while read b; do git branch -D "$b"; done',
+                  "if true; then git reset --hard; fi", "{ git clean -fd; }"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
+    def test_rm_boundary(self):
+        # 깊은 경로 정리는 일상이다 / 변수만 있는 경로·.git·-f 없는 -r
+        for c in ["rm -rf /tmp/build-x", "rm -rf /Users/me/proj/dist", "rm -rf ~/.cache/tool/x"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+        for c in ['rm -rf "$DIR"/', "rm -rf $PWD", "rm -rf .git", "rm -r ~", "rm -rf ~/Projects",
+                  "rm -rf /Users/me"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
+    def test_git_boundary(self):
+        # 오탐 / 미탐
+        for c in ["find . -name '*.pyc' -delete", "git restore --staged a.ts", "git revert --no-commit HEAD"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+        for c in ["git checkout origin/main src/a.ts", "git revert HEAD", "git cherry-pick abc",
+                  "git filter-branch --tree-filter x", "git reflog expire --all", "git update-ref -d refs/heads/x",
+                  "find . -delete"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
+    def test_deny_message_does_not_reveal_commit_token(self):
+        self.assertNotIn("CLAUDE_COMMIT_APPROVED", reason(self.check("git commit -m x")))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,10 +375,53 @@ class DelegationTest(unittest.TestCase):
         self.assertIsNone(self.agent("block-impl-delegation.py", "general-purpose",
                                      "[HARNESS: 구현위임 승인됨] src/a.ts 를 구현해라."))
 
+    def test_delegation_corpus(self):
+        # 미탐과 오탐을 한 코퍼스로 고정
+        hook = "block-impl-delegation.py"
+        for t, p in [("general-purpose", "src/a.ts 의 버그를 수정해줘"),
+                     ("general-purpose", "src/a.ts 에 검증 로직을 추가해줘"),
+                     ("general-purpose", "fix the bug in src/lib/format.ts"),
+                     ("general-purpose", "update src/App.tsx to use the new layout"),
+                     ("my-research-impl", "src/a.ts 를 구현해라")]:
+            with self.subTest(t=t, p=p):
+                self.assertTrue(denied(self.agent(hook, t, p)))
+        for t, p in [("react-supabase-harness:planner", "plan 작성해. 대상 파일 docs/plans/phase-1.md, src/ 참고"),
+                     ("general-purpose", "레포를 감사하라. 파일 수정 금지. 결과를 /tmp/a/report.md 에 작성하라. hooks/x.py 를 읽어라"),
+                     ("general-purpose", "Audit hooks/x.py. Write your report to /tmp/r.md. Do not modify files."),
+                     ("general-purpose", "파일 쓰기·편집 툴(Write/Edit)이 src/ 에 닿는지 조사"),
+                     ("Plan", "src/ 구조를 바꿀 계획을 세워라")]:
+            with self.subTest(t=t, p=p):
+                self.assertIsNone(self.agent(hook, t, p))
+        send = lambda to, m: run_hook(hook, {"tool_name": "SendMessage", "tool_input": {"to": to, "message": m}})
+        self.assertIsNone(send("main", "src/a.ts 를 수정해야 할 것 같습니다 — 보고"))
+        self.assertTrue(denied(send("code-reviewer", "src/a.ts 를 구현해라")))  # 수신자 이름은 타입 근거가 아니다
+
+    def test_resuming_an_agent_with_implementation_work_is_denied(self):
+        # SendMessage 재개는 새 스폰과 같은 위임이다
+        out = run_hook("block-impl-delegation.py", {"tool_name": "SendMessage", "tool_input": {
+            "to": "helper", "message": "이어서 src/features/cart/api.ts 를 구현해라."}})
+        self.assertTrue(denied(out))
+        self.assertIsNone(run_hook("block-impl-delegation.py", {"tool_name": "SendMessage", "tool_input": {
+            "to": "helper", "message": "진행 상황만 알려줘."}}))
+
     def test_long_agent_without_output_file_denied(self):
         self.assertTrue(denied(self.agent("require-agent-output-file.py", "general-purpose", "시장 조사해줘")))
         self.assertIsNone(self.agent("require-agent-output-file.py", "general-purpose", "조사해서 /tmp/r.md 에 저장"))
         self.assertIsNone(self.agent("require-agent-output-file.py", "Explore", "찾아줘"))
+
+    def test_harness_reviewers_without_write_tool_pass(self):
+        # 쓰기 도구가 없는 리뷰어에게 파일 산출을 요구하면 /review-* 가 막힌다
+        for t in ["react-supabase-harness:craft-reviewer", "react-supabase-harness:stability-reviewer",
+                  "react-supabase-harness:structure-fitness-reviewer", "Plan"]:
+            with self.subTest(t=t):
+                self.assertIsNone(self.agent("require-agent-output-file.py", t, "src/App.tsx 리뷰"))
+
+    def test_input_path_alone_is_not_an_output_target(self):
+        # 읽을 문서 경로만 있는 프롬프트는 산출 지시가 아니다
+        self.assertTrue(denied(self.agent("require-agent-output-file.py", "general-purpose",
+                                          "docs/plans/a.md 를 읽고 요약")))
+        self.assertIsNone(self.agent("require-agent-output-file.py", "general-purpose",
+                                     "results -> C:\\work\\out.md"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,7 +486,34 @@ class ReportFailuresTest(unittest.TestCase):
                  user_text("b"), tool_use("b", "vercel ls"), tool_result("b", False), say("목록입니다.")]
         out = self.stop(lines)
         self.assertFalse(blocked(out))
-        self.assertIn("systemMessage", out)
+        # 모델이 읽어야 하는 피드백 — systemMessage(사용자 전용)가 아니라 additionalContext
+        self.assertIn("vercel ls", context(out))
+        self.assertNotIn("systemMessage", out)
+
+    def test_soft_notice_does_not_skip_failure_gate(self):
+        # 번복 알림이 이번 턴의 미보고 실패를 가리면 안 된다
+        lines = [user_text("a"), tool_use("a", "vercel ls"), tool_result("a", True), say("실패했습니다."),
+                 user_text("b"), tool_use("b", "vercel ls"), tool_result("b", False),
+                 tool_use("c", "vercel deploy"), tool_result("c", True, "denied"), say("목록입니다.")]
+        self.assertTrue(blocked(self.stop(lines)))
+
+    def test_final_text_comes_from_last_assistant_message(self):
+        # transcript 에 이번 턴 답변이 아직 없어도 stdin 의 최종 답변으로 판정한다
+        lines = [user_text("배포해"), tool_use("a", "vercel deploy"), tool_result("a", True, "denied")]
+        self.assertIsNone(self.stop(lines, last_assistant_message="배포가 권한 거부로 실패했습니다."))
+        self.assertTrue(blocked(self.stop(lines, last_assistant_message="배포를 마쳤습니다.")))
+
+    def test_git_subcommands_are_distinct_identities(self):
+        # `git status` 실패 뒤 `git log` 성공은 번복이 아니다
+        lines = [user_text("a"), tool_use("a", "git status"), tool_result("a", True), say("실패했습니다."),
+                 user_text("b"), tool_use("b", "git log"), tool_result("b", False), say("로그입니다.")]
+        self.assertIsNone(self.stop(lines))
+
+    def test_irreversible_git_reversal_blocks(self):
+        lines = [user_text("a"), tool_use("a", "git push origin main"), tool_result("a", True, "rejected"),
+                 say("push 가 거부돼 실패했습니다."),
+                 user_text("b"), tool_use("b", "git push origin main"), tool_result("b", False), say("올렸습니다.")]
+        self.assertTrue(blocked(self.stop(lines)))
 
     def test_generic_interpreters_are_not_tracked(self):
         lines = [user_text("a"), tool_use("a", "python3 -"), tool_result("a", True), say("실패했습니다."),
@@ -340,8 +541,10 @@ class CommitBoundaryTest(unittest.TestCase):
         for i in range(n):
             (self.repo / f"f{i}.txt").write_text(str(i))
 
-    def stop(self):
-        return run_hook("commit-boundary-gate.py", {"cwd": str(self.repo)})
+    def stop(self, **extra):
+        # 상태는 저장소 밖(~/.claude/state)에 쓴다 — HOME 을 임시 디렉터리로 격리한다.
+        return run_hook("commit-boundary-gate.py", {"cwd": str(self.repo), **extra},
+                        env={"HOME": str(self.repo / ".home")})
 
     def test_below_band_is_silent(self):
         self.files(5)
@@ -350,15 +553,34 @@ class CommitBoundaryTest(unittest.TestCase):
     def test_band_notifies_once(self):
         self.files(25)
         out = self.stop()
-        self.assertIn("systemMessage", out)
+        self.assertIn("미커밋 변경", context(out))
         self.assertFalse(blocked(out))  # 알림만 — 차단하지 않는다
         self.assertIsNone(self.stop())  # 같은 띠에서 반복 금지
+
+    def test_state_file_stays_out_of_the_repo(self):
+        self.files(25)
+        self.stop()
+        self.assertFalse((self.repo / ".claude" / "state" / "commit-boundary.json").exists())
+
+    def test_band_drop_rearms_the_alert(self):
+        # 40 띠에서 운 뒤 일부 커밋으로 20 띠로 내려갔다가 다시 40 을 넘으면 다시 운다
+        self.files(45)
+        self.stop()
+        for i in range(20, 45):
+            (self.repo / f"f{i}.txt").unlink()
+        self.assertIsNone(self.stop())
+        self.files(45)
+        self.assertIn("40+", context(self.stop()))
+
+    def test_proposal_in_last_assistant_message_silences(self):
+        self.files(25)
+        self.assertIsNone(self.stop(last_assistant_message="커밋 경계를 이렇게 나누자: ..."))
 
     def test_next_band_notifies_again(self):
         self.files(25)
         self.stop()
         self.files(45)
-        self.assertIn("40+", self.stop()["systemMessage"])
+        self.assertIn("40+", context(self.stop()))
 
     def test_escape_hatch(self):
         (self.repo / ".claude" / "state").mkdir(parents=True)
@@ -385,7 +607,23 @@ class ReviewProtocolTest(unittest.TestCase):
                 self.assertIn(f"{ROOT}/docs/REVIEW-PROTOCOL.md", out["_text"])
 
     def test_non_review_prompts_are_silent(self):
-        for t in ["감사합니다", "리뷰한거야?", "proposal-review 스킬 설명"]:
+        for t in ["감사합니다", "리뷰한거야?", "some-review 스킬 설명", "the review table needs a rating column"]:
+            with self.subTest(t=t):
+                self.assertIsNone(self.prompt(t))
+
+    # 실측 코퍼스 — 리뷰 요청 8건 미탐, 비리뷰 요청 5건 오탐이었다
+    def test_audit_corpus_review_requests_fire(self):
+        for t in ["이 PR 검토해줘", "src/features/auth 점검 부탁해", "이 코드 문제점 찾아줘",
+                  "평가해줘 이 설계", "보안 점검 해줘", "can you review src/lib/format.ts?",
+                  "please review PR #12", "Critique my schema"]:
+            with self.subTest(t=t):
+                self.assertIsNotNone(self.prompt(t))
+
+    def test_audit_corpus_review_as_entity_or_followup_is_silent(self):
+        # "리뷰"는 커머스 도메인의 1급 엔티티 — 리뷰 기능을 만드는 요청에 위임 지시를 주입하면
+        # 구현 비위임(RULES §7)과 정면 충돌한다.
+        for t in ["상품 리뷰 작성 기능을 만들고 싶어", "리뷰 테이블에 rating 컬럼 추가해줘",
+                  "리뷰 목록 화면 진행하자", "코드 리뷰 코멘트 반영해줘", "/review-craft 결과 보고 수정 진행해"]:
             with self.subTest(t=t):
                 self.assertIsNone(self.prompt(t))
 
@@ -393,6 +631,202 @@ class ReviewProtocolTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # 매니페스트 — hooks.json 이 가리키는 파일이 실재하고 버전이 일치한다
 # ─────────────────────────────────────────────────────────────────────────────
+class StackComplianceTest(unittest.TestCase):
+    """선언(deps·alias)과 사용(우회 코드) 두 층. 템플릿 프로젝트는 선언을 다 갖춰 ①이 침묵한다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def full_stack(self):
+        (self.proj / "package.json").write_text(json.dumps({"dependencies": {
+            "react": "19", "@tanstack/react-query": "5"}, "devDependencies": {"tailwindcss": "4"}}))
+        (self.proj / "tsconfig.json").write_text('{"compilerOptions": {"paths": {"@/*": ["./src/*"]}}}')
+
+    def write(self, name, content):
+        return run_hook("stack-compliance-guard.py",
+                        {"tool_name": "Write", "tool_input": {
+                            "file_path": str(self.proj / "src" / name), "content": content}},
+                        env={"CLAUDE_PROJECT_DIR": str(self.proj)})
+
+    def test_missing_declarations_are_reported_once(self):
+        (self.proj / "package.json").write_text('{"dependencies": {"react": "19"}}')
+        self.assertIn("Tailwind", context(self.write("App.tsx", "export {}")))
+        self.assertIsNone(self.write("B.tsx", "export {}"))
+
+    def test_clean_code_in_full_stack_project_is_silent(self):
+        self.full_stack()
+        self.assertIsNone(self.write("App.tsx", "import { x } from '@/lib/x';\nexport const A = () => null;"))
+
+    def test_bypass_signals_fire_in_full_stack_project(self):
+        self.full_stack()
+        cases = [
+            ("A.tsx", "import { db } from '../../lib/db';", "상대경로"),
+            ("B.tsx", "import './B.css';\nexport {}", "CSS"),
+            ("C.tsx", "useEffect(() => { fetch('/api/x').then(setX) }, []);", "TanStack"),
+            ("D.tsx", "useEffect(() => { supabase.from('posts').select('*') }, []);", "TanStack"),
+        ]
+        state = self.proj / ".claude" / "state" / "stack-compliance.json"
+        for name, code, needle in cases:
+            with self.subTest(name=name):
+                state.unlink(missing_ok=True)  # 신호당 1회 — 같은 신호의 다른 형태를 보려면 비운다
+                self.assertIn(needle, context(self.write(name, code)))
+
+    def test_each_bypass_signal_fires_once_per_project(self):
+        self.full_stack()
+        self.assertIsNotNone(self.write("A.tsx", "import { db } from '../../lib/db';"))
+        self.assertIsNone(self.write("B.tsx", "import { db } from '../../lib/db';"))
+
+    def test_non_react_project_is_silent(self):
+        (self.proj / "package.json").write_text('{"dependencies": {"commander": "1"}}')
+        self.assertIsNone(self.write("cli.ts", "import x from '../../x';"))
+
+
+class SecondReverifyRegressionTest(unittest.TestCase):
+    """2차 독립 재검증에서 재현된 우회·오탐. 재현 입력을 그대로 고정한다."""
+
+    def bash_destructive(self, command):
+        return run_hook("block-destructive-git.py", {"tool_name": "Bash", "tool_input": {"command": command}})
+
+    def test_unparseable_command_still_blocks_destructive_patterns(self):
+        # 파싱 실패 폴백이 부분문자열 목록이라 `git commit`·`push -f` 가 통과했다(fail-closed 주장 반증).
+        # 승인 커밋 접두어 뒤에 붙인 명령도 폴백에서 검사해야 한다.
+        unparseable = "echo $'it\\'s'"
+        for c, want in [(f"{unparseable} && git commit -m x", True),
+                        (f"{unparseable} && git push -f origin main", True),
+                        ("CLAUDE_COMMIT_APPROVED=1 git commit -m \"a $'x\\'\" && git push --force", True),
+                        ("CLAUDE_COMMIT_APPROVED=1 git commit -m \"a $'x\\'\" && rm -rf ~", True),
+                        ("CLAUDE_COMMIT_APPROVED=1 git commit -m \"a $'x\\'\"", False),
+                        (f"{unparseable} && git push --force-with-lease origin main", False),
+                        (f"{unparseable} && ls", False)]:
+            with self.subTest(c=c):
+                self.assertEqual(denied(self.bash_destructive(c)), want)
+
+    def test_embedded_and_piped_commands_are_scanned(self):
+        for c, want in [("ls |& git push --force", True),
+                        ("echo `git reset --hard`", True),
+                        ("echo \"x `git reset --hard`\"", True),
+                        ("bash <<< 'git reset --hard'", True),
+                        ("echo 'git push --force' | sh", True),
+                        ("find . -type f -delete", True),   # -type 은 범위를 좁히는 필터가 아니다
+                        ("rm -rf $(pwd)", True),            # 따옴표 없는 $(pwd)
+                        ("find . -name '*.tmp' -delete", False),
+                        ("echo 'use `git reset --hard` carefully'", False),
+                        ("echo `date`", False),
+                        ("rm -rf build", False)]:
+            with self.subTest(c=c):
+                self.assertEqual(denied(self.bash_destructive(c)), want)
+
+    def test_shell_self_protection_survives_path_splitting(self):
+        with tempfile.TemporaryDirectory() as d:
+            def gate(c):
+                return run_hook("gate-engine.py", {"tool_name": "Bash", "tool_input": {"command": c}},
+                                env={"CLAUDE_PROJECT_DIR": d})
+            for c, want in [("cd .claude/state && touch plan-gate-off", True),
+                            ("D=.claude/state; touch $D/plan-gate-off", True),
+                            ("touch .claude/{state,x}/plan-gate-off", True),
+                            ("touch .cl''aude/st\"ate\"/plan-gate-off", True),
+                            ("cd .claude/gates && sed -i s/deny/warn/ rules.jsonc", True),
+                            ("ls .claude/state 2>/dev/null", False),
+                            ("cat .claude/gates/rules.jsonc", False),
+                            ("pnpm build > build.log", False)]:
+                with self.subTest(c=c):
+                    self.assertEqual(denied(gate(c)), want)
+
+    def test_settings_and_installed_rules_are_protected(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "package.json").write_text("{}")
+            (Path(d) / "supabase").mkdir()
+            s = str(Path(d) / ".claude" / "settings.json")
+
+            def gate(payload, **env):
+                return run_hook("gate-engine.py", payload, env={"CLAUDE_PROJECT_DIR": d, **env})
+
+            def edit(path, body):
+                return {"tool_name": "Edit", "tool_input": {"file_path": path, "new_string": body}}
+
+            pkg = "shad" + "cn"
+            for payload, want in [
+                (edit(s, '{"disableAllHooks": true}'), True),
+                (edit(s, '{"enabledPlugins": {"react-supabase-harness@react-supabase": false}}'), True),
+                (edit(s, '{"env": {"HARNESS\\u005fGATE_PLAN_GATE_OFF": "1"}}'), True),
+                (edit(s, '{"permissions": {"allow": ["Bash(ls)"]}}'), False),
+                (edit(str(Path.home() / ".claude/plugins/cache/x/react-supabase-harness/0.31.0/gates/rules.jsonc"), "{}"), True),
+                ({"tool_name": "Bash", "tool_input": {"command": "echo '{\"disableAllHooks\": true}' > .claude/settings.json"}}, True),
+                ({"tool_name": "Bash", "tool_input": {"command": "pnpm dlx " + pkg + "@latest init"}}, True),
+                ({"tool_name": "Bash", "tool_input": {"command": "bunx " + pkg + " add button"}}, True),
+                ({"tool_name": "Bash", "tool_input": {"command": "pnpm add " + "radix" + "-ui"}}, True),
+                ({"tool_name": "Bash", "tool_input": {"command": "pnpm dlx create-vite"}}, False),
+            ]:
+                with self.subTest(p=json.dumps(payload)[:90]):
+                    self.assertEqual(denied(gate(payload)), want)
+            rules_in_root = edit("/opt/plugroot/gates/rules.jsonc", "{}")
+            self.assertTrue(denied(gate(rules_in_root, CLAUDE_PLUGIN_ROOT="/opt/plugroot")))
+
+    def test_delegation_verbs_and_noise(self):
+        def spawn(p):
+            return run_hook("block-impl-delegation.py", {"tool_name": "Agent", "tool_input": {
+                "prompt": p, "subagent_type": "general-purpose"}})
+        for p, want in [("src/auth.ts 에 로그인 로직을 구현할 것", True),
+                        ("src/auth.ts 를 다음 스펙대로 구현하시오", True),
+                        ("이 패치를 src/a.ts 에 적용해줘", True),
+                        ("src/components/Button.tsx 를 생성해", True),
+                        ("Rewrite src/a.ts to use hooks", True),
+                        ("결과 화면 컴포넌트 src/Result.tsx 를 작성해", True),
+                        ("Do not modify tests, just implement src/a.ts", True),
+                        ("Review the change in src/a.ts and verify the fix. 결과를 /tmp/r.md 에 저장", False),
+                        ("src/a.ts 를 읽고 고쳐야 할 점을 나열하라. 결과를 /tmp/r.md 에 저장", False),
+                        ("list what to fix in src/a.ts; save your report to /tmp/r.md", False)]:
+            with self.subTest(p=p):
+                self.assertEqual(denied(spawn(p)), want)
+
+
+class BoardingGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self.tmp.name)
+        (self.proj / ".git").mkdir()
+        (self.proj / "package.json").write_text("{}")
+        (self.proj / "supabase").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_guard(self):
+        return run_hook("harness-boarding-guard.py", {"cwd": str(self.proj)},
+                        env={"CLAUDE_PROJECT_DIR": str(self.proj)})
+
+    def mark(self):
+        (self.proj / ".harness.json").write_text('{"harness": "react-supabase-harness", "role": "project"}')
+
+    def plan(self, name="phase-1.md"):
+        (self.proj / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+        (self.proj / "docs" / "plans" / name).write_text("# plan")
+
+    def test_no_marker_no_plan_speaks(self):
+        self.assertIn("미탑승", context(self.run_guard()))
+
+    def test_marker_alone_does_not_silence(self):
+        # 마커를 만드는 것만으로 조용해지면 /phase 건너뛰기를 못 본다
+        self.mark()
+        self.plan("story.template.md")
+        self.assertIn("/phase 를 밟지 않았다", context(self.run_guard()))
+
+    def test_marker_and_real_plan_is_silent(self):
+        self.mark()
+        self.plan()
+        self.assertIsNone(self.run_guard())
+
+    def test_placeholder_is_hard_even_with_marker_and_plan(self):
+        self.mark()
+        self.plan()
+        (self.proj / "README.md").write_text("# __PROJECT_NAME__")
+        self.assertIn("__PROJECT_NAME__", context(self.run_guard()))
+
+
 class ManifestTest(unittest.TestCase):
     def test_every_wired_hook_exists(self):
         h = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
@@ -408,6 +842,27 @@ class ManifestTest(unittest.TestCase):
         market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
         entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
         self.assertEqual(entry["version"], plugin["version"])
+
+    def test_skills_and_agents_reference_plugin_files_through_plugin_root(self):
+        # 설치된 프로젝트의 cwd 에는 하네스 docs/ 가 없다. 스킬·에이전트 본문은
+        # `${CLAUDE_PLUGIN_ROOT}` 가 로드 시점에 치환되므로 그 경로로만 참조해야 한다.
+        import re
+        bare = re.compile(r"(?<![\w/.$}-])(docs/(RULES|WORKFLOW|PLANNING|INFRA|REVIEW-PROTOCOL|BOOTSTRAP)\.md"
+                          r"|agents/[a-z-]+\.md|scripts/synthesize\.py)")
+        for f in list((ROOT / "skills").glob("*/SKILL.md")) + list((ROOT / "agents").glob("*.md")):
+            with self.subTest(f=f.relative_to(ROOT)):
+                self.assertEqual(bare.findall(f.read_text()), [])
+
+    def test_hook_output_has_no_unexpanded_plugin_root(self):
+        # 훅 출력 텍스트는 치환되지 않는다. 훅이 환경변수로 직접 풀어야 한다.
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "package.json").write_text("{}")
+            (Path(d) / "supabase").mkdir()
+            out = run_hook("harness-boarding-guard.py", {"cwd": d},
+                           env={"CLAUDE_PROJECT_DIR": d, "CLAUDE_PLUGIN_ROOT": "/opt/plugin-root"})
+        text = json.dumps(out, ensure_ascii=False)
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT}", text)
+        self.assertIn("/opt/plugin-root/docs/BOOTSTRAP.md", text)
 
 
 if __name__ == "__main__":
