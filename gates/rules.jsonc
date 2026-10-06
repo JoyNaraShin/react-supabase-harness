@@ -9,7 +9,7 @@
 //   bodyRegex     "정규식" | {pattern, except, flags}  본문 매칭 (except = 오탐 제외)
 //   pkgRef        {packages:[…]}                   패키지 참조 (설치명령·deps·import 동시)
 //   bodySizeOver  {lines, chars}                   '한 문장 diff' 초과 여부
-//   globExists    "패턴" | [패턴…]                  프로젝트에 해당 파일이 있는가
+//   globExists    "패턴" | [패턴…] | {pattern, except} 프로젝트에 해당 파일이 있는가(except = 제외할 파일명 패턴)
 //   harnessTarget true                             하네스 관할 프로젝트인가
 //   escapeHatch   "이름"                            탈출구가 켜졌는가
 //
@@ -28,7 +28,7 @@
           "pkgRef": {
             "packages": [
               "@mui/material", "@mui/core", "@mui/joy",
-              "@radix-ui",
+              "@radix-ui", "radix-ui",
               "antd", "@ant-design",
               "@chakra-ui",
               "@headlessui",
@@ -55,12 +55,13 @@
                        "*/src/*.py", "*/src/*.sql", "*/src/*.svelte", "*/src/*.vue",
                        "src/*.ts", "src/*.tsx", "src/*.js", "src/*.jsx",
                        "src/*.py", "src/*.sql", "src/*.svelte", "src/*.vue"] },
-        { "not": true, "globExists": ["docs/plans/*.md"] },
+        // 플랜 정의는 세 훅이 같다: docs/plans/*.md 중 *.template.md 가 아닌 것
+        { "not": true, "globExists": { "pattern": ["docs/plans/*.md"], "except": ["*.template.md"] } },
         { "bodySizeOver": { "lines": 20, "chars": 800 } }
       ],
       "action": "deny",
       "off": "plan-gate-off",
-      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다.\n\n할 것 — 둘 중 하나:\n  ① `/phase` 로 슬라이스 플랜을 먼저 쓴다 (정석)\n  ② 정말 한 문장 diff 면 편집을 잘게 쪼갠다 (20줄·800자 이하는 통과)"
+      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다(템플릿 제외).\n\n할 것 — `/phase` 로 슬라이스 플랜을 먼저 쓴다. 플랜 없이 진행해야 하는 사정이면 사용자에게 알리고 결정을 받는다."
     }
   ]
 }

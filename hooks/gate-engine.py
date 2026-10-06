@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """게이트 엔진 — 훅 1개가 데이터로 정의된 룰 N개를 집행한다.
 
-왜 엔진인가 (2026-08-17):
+왜 엔진인가 :
     룰 하나당 훅 하나로 만들면 룰 수만큼 훅이 늘고, 훅마다 발동 범위·탈출구·오탐 처리를
     다시 짜게 된다. 업계 정답은 ESLint 모델이다 — **룰 로직은 재사용 술어로 코드에,
-    무엇을 어떤 조건으로 켤지는 데이터로.** OMC 도 `omc.jsonc` 로 같은 분리를 한다.
-    (근거: 2026-08-17 하네스 리서치 — OMC 는 에이전트 32·스킬 40+ 인데 훅은 6개다.
-     지식은 늘어나도 집행 지점은 한 자릿수에서 멈춘다.)
+    무엇을 어떤 조건으로 켤지는 데이터로.**
+    지식(에이전트·스킬)은 늘어나도 집행 지점은 한 자릿수로 유지한다.
 
-🔴 설계 원칙 — 리서치에서 역산한 것
-    ① **LLM 판정 게이트를 만들지 않는다.** BMAD 의 QA 에이전트는 깨진 코드에 성공을
-       보고했고, Superpowers 의 TDD 강제는 에이전트가 우회했다. 판정이 확률적이면
-       "검증했다고 믿게" 만들어 없느니만 못하다. 이 엔진은 **결정론적 술어만** 쓴다.
+🔴 설계 원칙
+    ① **LLM 판정 게이트를 만들지 않는다.** 판정이 확률적이면 "검증했다고 믿게"
+       만들어 없느니만 못하다. 이 엔진은 **결정론적 술어만** 쓴다.
     ② **오탐이 게이트를 죽인다.** 모든 룰에 탈출구를 두고, 파싱 실패·설정 부재는
        전부 fail-open(통과)이다. 게이트가 작업을 세우면 다음엔 통째로 꺼진다.
     ③ **룰 추가는 데이터 한 덩어리.** 코드를 고치는 건 새 *술어*가 필요할 때뿐이다.
@@ -39,12 +37,14 @@ def ctx_from(data: dict) -> dict:
         body = ti.get("content") or ""
     elif tool == "Edit":
         body = ti.get("new_string") or ""
+    elif tool == "NotebookEdit":
+        body = ti.get("new_source") or ""
     else:
         body = ""
     return {
         "tool": tool,
         "input": ti,
-        "path": (ti.get("file_path") or "").replace("\\", "/"),
+        "path": (ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/"),
         "body": body,
         "command": ti.get("command") or "",
         "replace_all": bool(ti.get("replace_all")),
@@ -59,7 +59,8 @@ def ctx_from(data: dict) -> dict:
 
 INSTALL_CMD = re.compile(
     r"\b(?:npm\s+(?:i|install|add)|pnpm\s+(?:i|install|add)|yarn\s+add"
-    r"|bun\s+(?:add|install)|npx\s+[\w@/.-]+)\b",
+    r"|bun\s+(?:add|install)|npx\s+[\w@/.-]+|bunx\s+[\w@/.-]+"
+    r"|(?:pnpm|yarn)\s+dlx|pnpm\s+exec|npm\s+(?:exec|create|init))\b",
     re.IGNORECASE,
 )
 IMPORT_SPEC = re.compile(r"""(?:from|require\(|import\()\s*['"]([^'"]+)['"]""")
@@ -122,7 +123,7 @@ def p_pkg_ref(ctx, a):
                 return (True, b)
         return (False, "")
     # import 구문은 JS 계열 소스에서만 의미가 있다. .py·.md 안의 예시 문자열은 도입이 아니다
-    # (2026-10-01 실측: 테스트 픽스처 문자열을 UI 라이브러리 도입으로 차단).
+    # (실측: 테스트 픽스처 문자열을 UI 라이브러리 도입으로 차단).
     if not ctx["path"].lower().endswith(JS_SOURCE):
         return (False, "")
     for m in IMPORT_SPEC.finditer(ctx["body"]):
@@ -144,10 +145,17 @@ def p_body_size_over(ctx, a):
 
 
 def p_glob_exists(ctx, a):
-    pats = a if isinstance(a, list) else [a]
+    """`"패턴"` | `[패턴…]` | `{"pattern": …, "except": [파일명 패턴…]}`.
+    except 는 파일 이름에 대조한다 — 예: 플랜 템플릿(`*.template.md`)은 플랜이 아니다."""
+    if isinstance(a, dict):
+        pats, excl = a.get("pattern", []), a.get("except", [])
+    else:
+        pats, excl = a, []
+    pats = pats if isinstance(pats, list) else [pats]
+    excl = excl if isinstance(excl, list) else [excl]
     for g in pats:
         for f in ctx["root"].glob(g):
-            if f.is_file():
+            if f.is_file() and not any(fnmatch.fnmatch(f.name, x) for x in excl):
                 return (True, str(f.relative_to(ctx["root"])))
     return (False, "")
 
@@ -172,7 +180,7 @@ def p_harness_target(ctx, a):
 
 def p_escape_hatch(ctx, a):
     """탈출구가 켜져 있는가. 파일 또는 환경변수."""
-    if (ctx["root"] / ".claude" / "state" / a).exists():
+    if (ctx["root"] / ".claude" / "state" / a).is_file():  # 디렉터리는 탈출구가 아니다
         return (True, a)
     env = "HARNESS_GATE_" + re.sub(r"[^A-Z0-9]", "_", a.upper())
     return ((os.environ.get(env) or "").lower() == "off", a)
@@ -198,7 +206,7 @@ PREDICATES = {
 def strip_jsonc(t: str) -> str:
     """JSONC → JSON. **문자열 리터럴 안은 절대 건드리지 않는다.**
 
-    🔴 정규식으로 벗기면 안 된다 (2026-08-17 실측 버그):
+    🔴 정규식으로 벗기면 안 된다 (실측 버그):
        `"*/src/*.ts", "*/src/*.tsx"` 안의 `/*` … `*/` 를 블록 주석으로 오인해
        glob 패턴을 통째로 삭제했고, 정규식 `[\\w.]{2,}` 의 쉼표를 후행 쉼표로 오인해
        `{2}` 로 바꿨다. 룰이 조용히 무력화되는데 파싱은 성공해서 더 위험했다.
@@ -304,10 +312,84 @@ def evaluate(rule: dict, ctx: dict):
         if ok != (not neg):
             return None
         # 부정 조건의 반환값(예: 꺼져 있는 탈출구 이름)은 '무엇이 걸렸나'가 아니다.
-        # 2026-10-01 실측: no-ui-library 차단 메시지에 패키지명 대신 `ui-lib-gate-off` 가 찍혔다.
+        # 실측: no-ui-library 차단 메시지에 패키지명 대신 `ui-lib-gate-off` 가 찍혔다.
         if m and not neg and not matched:
             matched = m
     return matched or "match"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 자기 보호 — 데이터 룰이 아니라 코드다(룰 파일로 끌 수 없어야 의미가 있다)
+#   게이트에 막힌 에이전트가 툴 한 번으로 탈출구를 켜거나 룰 파일을 덮어쓰면
+#   모든 deny 룰이 자기 신고로 무너진다. 탈출구는 사람이 켠다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PROTECTED_PATH = re.compile(
+    r"(^|/)\.claude/(state/[\w.-]*gate-off|gates/rules\.jsonc?)$"
+    r"|(^|/)\.claude/plugins/.*/gates/rules\.jsonc?$", re.IGNORECASE)
+# 설정에서 게이트를 끄는 키 — 탈출구 env · 훅 전체 끄기 · 플러그인 비활성화
+SETTINGS_OFF = re.compile(
+    r"HARNESS_GATE_|disableAllHooks|react-supabase-harness@[\w-]+\"?\s*:\s*false", re.IGNORECASE)
+
+
+def _unescape(text: str) -> str:
+    """JSON 의 \\uXXXX 이스케이프로 키 이름을 가리는 우회를 푼다."""
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+
+
+def _in_plugin_root(path: str) -> bool:
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    return bool(root) and os.path.normpath(path).startswith(os.path.normpath(root) + os.sep)
+# 셸 명령에서 보호 경로를 '쓰기 대상'으로 쓰는가. 읽기(`cat`, `ls … 2>/dev/null`)는 통과.
+PROTECTED_TOKEN = r"[^\s'\";|&]*\.claude/(?:state/[\w.*-]*gate-off[\w.-]*|gates(?:/[\w.*-]*)?)"
+CMD_WRITES = re.compile(
+    r"(?:^|[\s;&|(])(?:touch|tee|cp|mv|ln|install|rm|truncate|mkdir|dd|rsync|"
+    r"sed\s+-i\S*|perl\s+-\S*i\S*)\b[^;&|]*" + PROTECTED_TOKEN
+    + r"|>>?\s*['\"]?" + PROTECTED_TOKEN
+    + r"|\bgit\s+(?:checkout|restore)\b[^;&|]*" + PROTECTED_TOKEN,
+    re.IGNORECASE,
+)
+# 설정 파일의 env 로 탈출구 환경변수를 켜는 경로.
+SETTINGS_PATH = re.compile(r"(^|/)\.claude/settings(\.local)?\.json$", re.IGNORECASE)
+
+
+# 경로를 쪼개서 쓰는 우회(`cd .claude/state && touch plan-gate-off`, 변수, 중괄호, 따옴표 분할)는
+# 경로 정규식으로 못 잡는다. 그래서 정규화한 명령 전체에서 "보호 대상 언급"과 "쓰기 동작"이
+# 함께 나오면 막는다. 읽기만 하는 명령(`ls`, `cat`)은 쓰기 동작이 없어 통과한다.
+PROTECTED_MENTION = re.compile(r"gate-?off|rules\.jsonc?|\.claude/[{]?\s*(?:state|gates)\b", re.IGNORECASE)
+SHELL_WRITE = re.compile(
+    r"(?:^|[\s;&|(`])(?:touch|tee|cp|mv|ln|install|truncate|mkdir|dd|rsync|ed|ex|"
+    r"sed\s+-i\S*|perl\s+-\S*i\S*|awk\s+-i)\b"
+    r"|\bgit\s+(?:checkout|restore)\b"
+    r"|(?<![0-9&])>>?\|?(?!\s*/dev/null)(?!&)",
+)
+
+
+def shell_touches_protected(cmd: str):
+    flat = re.sub(r"[\\'\"]", "", _unescape(cmd))
+    mentions = PROTECTED_MENTION.search(flat) or (
+        re.search(r"settings(?:\.local)?\.json", flat) and SETTINGS_OFF.search(flat))
+    if not mentions:
+        return None
+    return SHELL_WRITE.search(flat)
+
+
+def self_protect(ctx: dict):
+    if ctx["tool"] in ("Write", "Edit", "NotebookEdit"):
+        path = os.path.normpath(ctx["path"]).replace("\\", "/") if ctx["path"] else ""
+        hit = PROTECTED_PATH.search(path) or (
+            SETTINGS_PATH.search(path) and SETTINGS_OFF.search(_unescape(ctx["body"]))) or (
+            _in_plugin_root(path) and re.search(r"/gates/rules\.jsonc?$", path))
+    elif ctx["tool"] == "Bash":
+        cmd = re.sub(r"/+", "/", ctx["command"].replace("/./", "/"))
+        hit = CMD_WRITES.search(cmd) or shell_touches_protected(cmd)
+    else:
+        hit = None
+    if not hit:
+        return None
+    return ("게이트 설정(탈출구 파일·룰 파일)은 에이전트가 바꾸지 않는다 — 막힌 쪽이 스스로 "
+            "문을 열면 게이트가 자기 신고가 된다. 예외가 필요하면 이유와 함께 사용자에게 "
+            "요청하고, 사용자가 직접 만들게 하라.")
 
 
 def main() -> None:
@@ -318,6 +400,15 @@ def main() -> None:
 
     ctx = ctx_from(data)
     if not ctx["tool"]:
+        sys.exit(0)
+
+    guard = self_protect(ctx)
+    if guard:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": guard,
+        }}, ensure_ascii=False))
         sys.exit(0)
 
     warns = []
@@ -332,7 +423,8 @@ def main() -> None:
         msg = (rule.get("message") or f"게이트 `{rule['id']}` 위반").replace("{match}", m)
         if (rule.get("action") or "deny") == "deny":
             hatch = rule.get("off")
-            tail = f"\n\n이 프로젝트만 예외가 필요하면 **사용자에게 먼저 확인**하고 `touch .claude/state/{hatch}`." if hatch else ""
+            tail = (f"\n\n이 프로젝트만 예외가 필요하면 이유와 함께 사용자에게 요청하라 — 사용자가 "
+                    f"직접 `.claude/state/{hatch}` 를 만든다(에이전트의 쓰기는 차단된다).") if hatch else ""
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
