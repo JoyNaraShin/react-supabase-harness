@@ -45,7 +45,7 @@ BANDS = (20, 40)
 # 경계를 이미 제안했다고 인정하는 어휘. 넓게 잡는다 — 목적은 문체 강제가 아니라 누락 방지다.
 PROPOSED = re.compile(
     r"커밋 ?경계|경계 ?(쪼개|나누|가르|재검토)|커밋 ?(단위|분리|쪼개|나누)|"
-    r"단위로 ?(나누|쪼개|가르)|스테이징|staged|commit boundar|split.{0,12}commit",
+    r"단위로 ?(나누|쪼개|가르)|commit boundar|split.{0,30}commit",
     re.IGNORECASE,
 )
 
@@ -131,12 +131,15 @@ def main() -> None:
     if (repo / ".claude" / "state" / "commit-boundary-gate-off").exists():
         sys.exit(0)
 
-    # `normal` = 사용자가 `git status` 로 보는 것과 같은 수. `all` 은 추적 안 되는 디렉터리를
-    # 파일 단위로 펴서 수를 부풀린다(.gitignore 에서 새어 나간 빌드 산출물 하나로 오탐).
-    porcelain = git(repo, "status", "--porcelain", "--untracked-files=normal")
-    if porcelain is None:
+    # 추적 파일 변경은 porcelain 으로, 새 파일은 `ls-files -o --exclude-standard` 로 개별로 센다.
+    # `--untracked-files=normal` 은 새 디렉터리를 한 줄로 접어서 새 feature 폴더(파일 25개)가
+    # 1개로 세였다(3차 리뷰). `--exclude-standard` 는 .gitignore 를 따르므로 빌드 산출물로 부풀지 않는다.
+    porcelain = git(repo, "status", "--porcelain", "--untracked-files=no")
+    untracked = git(repo, "ls-files", "-o", "--exclude-standard")
+    if porcelain is None or untracked is None:
         sys.exit(0)  # fail-open
     entries = [l for l in porcelain.splitlines() if l.strip()]
+    entries += [f"?? {l}" for l in untracked.splitlines() if l.strip()]
     n = len(entries)
 
     # 상태는 대상 저장소 밖에 둔다 — 저장소 안에 쓰면 그 파일 자체가 미커밋 변경으로 잡히고,

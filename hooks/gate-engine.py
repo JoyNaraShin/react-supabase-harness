@@ -25,6 +25,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shellparse  # noqa: E402
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 입력 정규화 — 훅 페이로드에서 술어들이 쓸 공통 필드를 뽑는다
 # ─────────────────────────────────────────────────────────────────────────────
@@ -33,6 +36,11 @@ from pathlib import Path
 def ctx_from(data: dict) -> dict:
     tool = data.get("tool_name") or ""
     ti = data.get("tool_input") or {}
+    edits = None
+    if tool == "MultiEdit":
+        edits = [e for e in (ti.get("edits") or []) if isinstance(e, dict)]
+        tool = "Edit"
+        ti = dict(ti, new_string="\n".join(str(e.get("new_string") or "") for e in edits))
     if tool == "Write":
         body = ti.get("content") or ""
     elif tool == "Edit":
@@ -48,6 +56,7 @@ def ctx_from(data: dict) -> dict:
         "body": body,
         "command": ti.get("command") or "",
         "replace_all": bool(ti.get("replace_all")),
+        "edits": edits,
         "root": Path(os.environ.get("CLAUDE_PROJECT_DIR") or "."),
     }
 
@@ -57,12 +66,27 @@ def ctx_from(data: dict) -> dict:
 #   새 술어가 필요할 때만 코드를 고친다. 룰 추가는 데이터로.
 # ─────────────────────────────────────────────────────────────────────────────
 
-INSTALL_CMD = re.compile(
-    r"\b(?:npm\s+(?:i|install|add)|pnpm\s+(?:i|install|add)|yarn\s+add"
-    r"|bun\s+(?:add|install)|npx\s+[\w@/.-]+|bunx\s+[\w@/.-]+"
-    r"|(?:pnpm|yarn)\s+dlx|pnpm\s+exec|npm\s+(?:exec|create|init))\b",
-    re.IGNORECASE,
-)
+# 하위 명령 단위 설치 판정 — 옵션·워크스페이스 지정이 끼어도(`pnpm -F web add`, `yarn workspace web add`,
+# `npm --prefix web i`) 설치다. 같은 줄의 다른 하위 명령(`&& grep <금지> src/`)은 설치 인자가 아니다.
+PKG_MANAGERS = {"npm", "pnpm", "yarn", "bun", "deno", "volta"}
+INSTALL_VERBS = {"i", "in", "ins", "install", "add", "a", "dlx", "exec", "x", "create", "init"}
+RUNNERS = {"npx", "bunx", "pnpx"}
+
+
+def _install_args(cmd: str) -> list:
+    out = []
+    for seg in re.split(r"[;&|\n]+", cmd):
+        toks = [t for t in re.split(r"[\s'\"]+", seg) if t]
+        while toks and (re.match(r"^[A-Za-z_]\w*=", toks[0]) or toks[0] in ("sudo", "env", "command")):
+            toks = toks[1:]
+        if not toks:
+            continue
+        head = toks[0].rsplit("/", 1)[-1].lower()
+        if head in RUNNERS:
+            out += toks[1:]
+        elif head in PKG_MANAGERS and any(t.lower() in INSTALL_VERBS for t in toks[1:]):
+            out += toks[1:]
+    return out
 IMPORT_SPEC = re.compile(r"""(?:from|require\(|import\()\s*['"]([^'"]+)['"]""")
 DEP_KEY = re.compile(r'"([^"]+)"\s*:\s*"[^"]*"')
 JS_SOURCE = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte", ".astro")
@@ -110,11 +134,10 @@ def p_pkg_ref(ctx, a):
     """금지 패키지 참조를 세 경로에서 동시에 본다 — 설치 명령 · deps · import."""
     banned = a["packages"] if isinstance(a, dict) else a
     if ctx["tool"] == "Bash":
-        if INSTALL_CMD.search(ctx["command"]):
-            for tok in re.split(r"[\s'\"]+", ctx["command"]):
-                b = _pkg_hit(tok, banned)
-                if b:
-                    return (True, b)
+        for tok in _install_args(ctx["command"]):
+            b = _pkg_hit(re.sub(r"^npm:", "", tok), banned)
+            if b:
+                return (True, b)
         return (False, "")
     if ctx["path"].endswith("package.json"):
         for m in DEP_KEY.finditer(ctx["body"]):
@@ -327,9 +350,14 @@ def evaluate(rule: dict, ctx: dict):
 PROTECTED_PATH = re.compile(
     r"(^|/)\.claude/(state/[\w.-]*gate-off|gates/rules\.jsonc?)$"
     r"|(^|/)\.claude/plugins/.*/gates/rules\.jsonc?$", re.IGNORECASE)
-# 설정에서 게이트를 끄는 키 — 탈출구 env · 훅 전체 끄기 · 플러그인 비활성화
+HARNESS_ID = "react-supabase-harness"
+# 설정에서 게이트를 끄는 키 — 탈출구 env · 훅 전체 끄기 · 플러그인 비활성화(JSON 과 jq 문법 둘 다)
 SETTINGS_OFF = re.compile(
-    r"HARNESS_GATE_|disableAllHooks|react-supabase-harness@[\w-]+\"?\s*:\s*false", re.IGNORECASE)
+    r"HARNESS_GATE_|disableAllHooks"
+    r"|" + HARNESS_ID + r"@[\w-]+[\"'\]]*\s*[:=]\s*(?:false|0|null)\b"
+    r"|del\([^)]*" + HARNESS_ID, re.IGNORECASE)
+SETTINGS_PATH = re.compile(r"(^|/)\.claude/settings(\.local)?\.json$", re.IGNORECASE)
+PLUGINS_DIR = os.path.realpath(os.path.expanduser("~/.claude/plugins"))
 
 
 def _unescape(text: str) -> str:
@@ -340,56 +368,180 @@ def _unescape(text: str) -> str:
 def _in_plugin_root(path: str) -> bool:
     root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     return bool(root) and os.path.normpath(path).startswith(os.path.normpath(root) + os.sep)
-# 셸 명령에서 보호 경로를 '쓰기 대상'으로 쓰는가. 읽기(`cat`, `ls … 2>/dev/null`)는 통과.
-PROTECTED_TOKEN = r"[^\s'\";|&]*\.claude/(?:state/[\w.*-]*gate-off[\w.-]*|gates(?:/[\w.*-]*)?)"
-CMD_WRITES = re.compile(
-    r"(?:^|[\s;&|(])(?:touch|tee|cp|mv|ln|install|rm|truncate|mkdir|dd|rsync|"
-    r"sed\s+-i\S*|perl\s+-\S*i\S*)\b[^;&|]*" + PROTECTED_TOKEN
-    + r"|>>?\s*['\"]?" + PROTECTED_TOKEN
-    + r"|\bgit\s+(?:checkout|restore)\b[^;&|]*" + PROTECTED_TOKEN,
-    re.IGNORECASE,
-)
-# 설정 파일의 env 로 탈출구 환경변수를 켜는 경로.
-SETTINGS_PATH = re.compile(r"(^|/)\.claude/settings(\.local)?\.json$", re.IGNORECASE)
 
 
-# 경로를 쪼개서 쓰는 우회(`cd .claude/state && touch plan-gate-off`, 변수, 중괄호, 따옴표 분할)는
-# 경로 정규식으로 못 잡는다. 그래서 정규화한 명령 전체에서 "보호 대상 언급"과 "쓰기 동작"이
-# 함께 나오면 막는다. 읽기만 하는 명령(`ls`, `cat`)은 쓰기 동작이 없어 통과한다.
+def _installed_plugin_file(path: str) -> bool:
+    """설치된 플러그인(훅 코드·hooks.json 포함)인가. 훅 파일 하나를 고치면 모든 게이트가 꺼진다.
+    `data/` 는 플러그인이 쓰는 상태 디렉터리라 제외한다. `--plugin-dir` 로 소스 레포를 직접
+    로드해 개발하는 경우는 설치본이 아니므로 막지 않는다."""
+    return path.startswith(PLUGINS_DIR + "/") and not path.startswith(PLUGINS_DIR + "/data/")
+
+
+def _candidates(path: str, root: Path) -> set:
+    """판정할 경로 후보 — 정규화한 경로와 링크를 푼 실제 경로. 별칭 링크로 보호를 피하지 못한다."""
+    if not path:
+        return set()
+    p = os.path.expanduser(path)
+    if not os.path.isabs(p):
+        p = os.path.join(str(root), p)
+    out = {os.path.normpath(p)}
+    try:
+        out.add(os.path.realpath(p))
+    except Exception:
+        pass
+    return {c.replace("\\", "/") for c in out}
+
+
+def _protected_file(path: str, root: Path) -> bool:
+    return any(PROTECTED_PATH.search(c) or _installed_plugin_file(c)
+               or (_in_plugin_root(c) and re.search(r"/gates/rules\.jsonc?$", c))
+               for c in _candidates(path, root))
+
+
+def _settings_after(ctx: dict):
+    """편집이 적용된 뒤의 settings 내용. new_string 만 보면 `: true` → `: false` 나 항목 삭제를 놓친다."""
+    try:
+        before = Path(os.path.expanduser(ctx["path"])).read_text(encoding="utf-8")
+    except Exception:
+        return None, ctx["body"]
+    if ctx["tool"] == "Write":
+        return before, ctx["body"]
+    if ctx.get("edits") is not None:
+        after = before
+        for e in ctx["edits"]:
+            old = str(e.get("old_string") or "")
+            if old and old in after:
+                after = after.replace(old, str(e.get("new_string") or ""), -1 if e.get("replace_all") else 1)
+        return before, after
+    old = ctx["input"].get("old_string") or ""
+    if not old or old not in before:
+        return before, ctx["body"]
+    return before, before.replace(old, ctx["body"], -1 if ctx["replace_all"] else 1)
+
+
+def _harness_enabled(settings_text: str):
+    try:
+        plugins = json.loads(settings_text).get("enabledPlugins") or {}
+    except Exception:
+        return None
+    vals = [v for k, v in plugins.items() if k.startswith(HARNESS_ID + "@")]
+    return None if not vals else all(v is True for v in vals)
+
+
+def settings_turns_off(ctx: dict) -> bool:
+    before, after = _settings_after(ctx)
+    if SETTINGS_OFF.search(_unescape(ctx["body"])):
+        return True
+    try:
+        data = json.loads(after)
+    except Exception:
+        return False
+    env = data.get("env") or {}
+    if data.get("disableAllHooks") or any(str(k).upper().startswith("HARNESS_GATE_") for k in env):
+        return True
+    return before is not None and _harness_enabled(before) is True and _harness_enabled(after) is not True
+
+
+# 셸 명령은 하위 명령(`;` `&&` `|` 줄바꿈) 단위로 본다. 명령 전체에서 "보호 대상 언급"과 "쓰기"를
+# 따로 찾으면, `rg 'gate-off' hooks/ > out.txt` 처럼 읽기 결과를 다른 곳에 저장하는 정상 작업이 막힌다.
 PROTECTED_MENTION = re.compile(r"gate-?off|rules\.jsonc?|\.claude/[{]?\s*(?:state|gates)\b", re.IGNORECASE)
-SHELL_WRITE = re.compile(
-    r"(?:^|[\s;&|(`])(?:touch|tee|cp|mv|ln|install|truncate|mkdir|dd|rsync|ed|ex|"
-    r"sed\s+-i\S*|perl\s+-\S*i\S*|awk\s+-i)\b"
-    r"|\bgit\s+(?:checkout|restore)\b"
-    r"|(?<![0-9&])>>?\|?(?!\s*/dev/null)(?!&)",
-)
+CLAUDE_DIR = re.compile(r"(?:^|\s)(?:\S*/)?\.claude/?\.?(?=\s|$)")
+PLUGIN_MENTION = re.compile(r"\.claude/plugins(?:/(?!data(?:/|\s|$))|/?(?=\s|$))|\$\{?CLAUDE_PLUGIN_ROOT\b")
+SETTINGS_FILE = re.compile(r"(?:^|/)settings(?:\.local)?\.json$")
+# 대상 경로를 바꾸는 동사. 인터프리터 한 줄 실행도 같은 하위 명령에 보호 경로가 있으면 쓰기로 본다.
+WRITE_VERB = re.compile(
+    r"(?:^|[\s(`])(?:touch|tee|cp|mv|ln|install|truncate|mkdir|dd|rsync|ed|ex|rm|unlink|chmod|chown|"
+    r"curl|wget|tar|unzip|sed\s+-i\S*|perl\s+-\S*[ie]\S*|awk\s+-i|python3?\s+-c|node\s+-e|ruby\s+-e)\b"
+    r"|\bgit\s+(?:checkout|restore|apply|stash\s+pop)\b")
+REDIRECT_TARGET = re.compile(r"(?<![0-9&])>>?\|?\s*([^\s;&|]+)")
+DISABLE_PLUGIN = re.compile(
+    r"\bclaude\s+plugins?\s+(?:disable|uninstall|remove|rm)\b[^;&|]*react-supabase"
+    r"|\bclaude\s+plugins?\s+marketplace\s+(?:remove|rm)\b[^;&|]*react-supabase", re.IGNORECASE)
+
+
+def _segments(cmd: str) -> list:
+    flat = shellparse.prep(_unescape(cmd))              # heredoc 데이터·따옴표 속 메타문자 제거, 주석 제거
+    flat = re.sub(r"/+", "/", flat.replace("/./", "/"))
+    flat = re.sub(r"~(?=/)|\$\{?HOME\}?(?=/)", os.path.expanduser("~"), flat)
+    return [s.strip() for s in re.split(r"[;&|\n]+", flat) if s.strip()]
 
 
 def shell_touches_protected(cmd: str):
-    flat = re.sub(r"[\\'\"]", "", _unescape(cmd))
-    mentions = PROTECTED_MENTION.search(flat) or (
-        re.search(r"settings(?:\.local)?\.json", flat) and SETTINGS_OFF.search(flat))
-    if not mentions:
-        return None
-    return SHELL_WRITE.search(flat)
+    """보호 대상을 바꾸는 하위 명령을 찾는다. 앞선 `cd .claude/…` 로 위치를 옮긴 뒤의 쓰기도 본다."""
+    if DISABLE_PLUGIN.search(cmd):
+        return "plugin-disable"
+    inside = False
+    for seg in _segments(cmd):
+        if re.match(r"cd\s+\S*\.claude/(?:state|gates|plugins/(?!data))", seg):
+            inside = True                                # 게이트·플러그인 디렉터리 안으로 이동
+        targets = shellparse.write_targets(seg)
+        if any(SETTINGS_FILE.search(t) for t in targets) or re.match(
+                r"git\s+(?:checkout|restore)\b.*settings(?:\.local)?\.json", seg):
+            return "settings-bash"
+        settings = re.search(r"settings(?:\.local)?\.json", seg) and SETTINGS_OFF.search(seg)
+        verb = WRITE_VERB.search(seg)
+        if verb and verb.group(0).strip().split()[0] in ("cp", "rsync", "install"):
+            dest = [t for t in seg.split()[1:] if not t.startswith("-")][-1:]   # 복사는 마지막 인자만 쓴다
+            scope = " ".join(dest)
+        else:
+            scope = seg
+        mention = PROTECTED_MENTION.search(scope) or settings or PLUGIN_MENTION.search(scope) or (
+            "/.claude/plugins/" in scope and "/.claude/plugins/data/" not in scope)
+        if verb and verb.group(0).strip().startswith("mkdir") and not re.search(r"gate-?off", scope, re.I):
+            verb = None                                  # 디렉터리는 탈출구가 아니다 — 셋업용 mkdir 은 통과
+        if verb and (mention or inside):
+            return seg
+        if verb and CLAUDE_DIR.search(seg) and not seg.startswith("mkdir"):
+            return seg                                   # `.claude` 디렉터리째 덮어쓰기
+        if re.match(r"(?:\S*/)?ln\b", seg) and re.search(r"\.claude\b", seg):
+            return seg                                   # `.claude` 로 가는 별칭 링크
+        for m in REDIRECT_TARGET.finditer(seg):
+            t = m.group(1)
+            if t == "/dev/null":
+                continue
+            if inside or PROTECTED_MENTION.search(t) or PLUGIN_MENTION.search(t) or "/.claude/plugins/" in t \
+                    or (settings and re.search(r"settings(?:\.local)?\.json", t)):
+                return seg
+    return None
+
+
+def _bash_resolved_targets(cmd: str, root: Path) -> bool:
+    """링크를 거쳐 보호 대상에 닿는 쓰기 — `ln -s .claude cfg` 로 만든 별칭 경유.
+    링크를 푼 경로가 원래 경로와 다를 때만 본다(링크 없는 경로는 위의 문자열 판정이 맡는다)."""
+    import glob
+    for seg in _segments(cmd):
+        for tok in shellparse.write_targets(seg):
+            if "/" not in tok:
+                continue
+            base = tok if os.path.isabs(tok) else os.path.join(str(root), tok)
+            for p in (glob.glob(base) or [base]):
+                try:
+                    real = os.path.realpath(p)
+                except Exception:
+                    continue
+                if real != os.path.normpath(p) and _protected_file(real, root):
+                    return True
+    return False
 
 
 def self_protect(ctx: dict):
-    if ctx["tool"] in ("Write", "Edit", "NotebookEdit"):
-        path = os.path.normpath(ctx["path"]).replace("\\", "/") if ctx["path"] else ""
-        hit = PROTECTED_PATH.search(path) or (
-            SETTINGS_PATH.search(path) and SETTINGS_OFF.search(_unescape(ctx["body"]))) or (
-            _in_plugin_root(path) and re.search(r"/gates/rules\.jsonc?$", path))
+    if ctx["tool"] in ("Write", "Edit", "NotebookEdit"):  # MultiEdit 는 ctx_from 에서 Edit 로 정규화
+        hit = _protected_file(ctx["path"], ctx["root"]) or (
+            bool(SETTINGS_PATH.search(ctx["path"])) and settings_turns_off(ctx))
     elif ctx["tool"] == "Bash":
-        cmd = re.sub(r"/+", "/", ctx["command"].replace("/./", "/"))
-        hit = CMD_WRITES.search(cmd) or shell_touches_protected(cmd)
+        hit = shell_touches_protected(ctx["command"]) or _bash_resolved_targets(ctx["command"], ctx["root"])
     else:
         hit = None
     if not hit:
         return None
-    return ("게이트 설정(탈출구 파일·룰 파일)은 에이전트가 바꾸지 않는다 — 막힌 쪽이 스스로 "
-            "문을 열면 게이트가 자기 신고가 된다. 예외가 필요하면 이유와 함께 사용자에게 "
-            "요청하고, 사용자가 직접 만들게 하라.")
+    if hit == "settings-bash":
+        return ("settings 파일을 셸로 쓰면 하네스·훅이 꺼지는지 판정할 수 없다 — 셸 쓰기는 막는다.\n"
+                "다음 행동: Edit 툴로 필요한 항목만 고쳐라(변경 후 상태를 보고 판정한다). 하네스를 끄는 변경이면 "
+                "사용자가 직접 한다.")
+    return ("게이트 설정(탈출구·룰 파일·settings 의 하네스 항목)과 설치된 플러그인 코드는 에이전트가 "
+            "바꾸지 않는다 — 막힌 쪽이 스스로 문을 열면 게이트가 자기 신고가 된다.\n"
+            "다음 행동: 원래 하려던 작업을 게이트 안에서 할 방법을 찾거나, 예외가 필요한 이유를 "
+            "사용자에게 설명하고 사용자가 직접 바꾸게 하라.")
 
 
 def main() -> None:
@@ -423,7 +575,8 @@ def main() -> None:
         msg = (rule.get("message") or f"게이트 `{rule['id']}` 위반").replace("{match}", m)
         if (rule.get("action") or "deny") == "deny":
             hatch = rule.get("off")
-            tail = (f"\n\n이 프로젝트만 예외가 필요하면 이유와 함께 사용자에게 요청하라 — 사용자가 "
+            lead = "" if "다음 행동" in msg else "다음 행동: 게이트 안의 대안으로 진행하거나, "
+            tail = (f"\n\n{lead}이 프로젝트만 예외가 필요하면 이유와 함께 사용자에게 요청하라 — 사용자가 "
                     f"직접 `.claude/state/{hatch}` 를 만든다(에이전트의 쓰기는 차단된다).") if hatch else ""
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

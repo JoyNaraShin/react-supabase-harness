@@ -15,12 +15,24 @@
 //
 // when 은 AND 리스트. 각 항목에 "not": true 를 넣으면 부정.
 // 프로젝트에서 덮어쓰려면 $CLAUDE_PROJECT_DIR/.claude/gates/rules.jsonc 에 같은 id 로.
+// `delegation` 객체는 룰이 아니라 block-impl-delegation 훅이 읽는 데이터다(키 단위로 덮어쓴다).
 {
   "version": 1,
+
+  // 구현 비위임(RULES §7) — 집행자는 hooks/block-impl-delegation.py.
+  // 서브에이전트(훅 입력에 agent_id 가 있는 호출)는 codeZone 을 쓰지 못한다. 경로는 프로젝트 루트 기준.
+  // writers = 코드 영역 쓰기를 허용할 에이전트 타입(구현 위임 예외). 프로젝트 파일에서 사용자가 추가한다.
+  "delegation": {
+    "codeZone": ["src/*", "app/*", "pages/*", "components/*", "lib/*", "supabase/*", "packages/*",
+                 "tests/*", "test/*", "e2e/*", "styles/*", "theme/*", "index.html", "package.json",
+                 "tsconfig*.json", "*.config.*", "biome.json*", "vercel.json"],
+    "writers": []
+  },
+
   "rules": [
     {
       "id": "no-ui-library",
-      // RULES §8 「외부 UI 컴포넌트 라이브러리 금지」
+      // RULES §8 기본 정책 — 외부 UI 컴포넌트 라이브러리를 쓰지 않는다(프로젝트 룰로 끌 수 있다)
       "on": ["Write", "Edit", "Bash"],
       "when": [
         { "not": true, "escapeHatch": "ui-lib-gate-off" },
@@ -40,7 +52,7 @@
       ],
       "action": "deny",
       "off": "ui-lib-gate-off",
-      "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 「외부 UI 컴포넌트 라이브러리 금지」.\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
+      "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 기본 정책(외부 UI 컴포넌트 라이브러리를 쓰지 않는다).\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
     },
 
     {
@@ -51,17 +63,21 @@
       "when": [
         { "not": true, "escapeHatch": "plan-gate-off" },
         { "harnessTarget": true },
-        { "pathGlob": ["*/src/*.ts", "*/src/*.tsx", "*/src/*.js", "*/src/*.jsx",
+        // 코드 디렉터리는 delegation.codeZone 과 같은 축(src·app·components·lib·pages) + 마이그레이션(스키마 퍼스트)
+        { "pathGlob": ["*/src/*.ts", "*/src/*.tsx", "*/src/*.mts", "*/src/*.js", "*/src/*.jsx",
                        "*/src/*.py", "*/src/*.sql", "*/src/*.svelte", "*/src/*.vue",
-                       "src/*.ts", "src/*.tsx", "src/*.js", "src/*.jsx",
-                       "src/*.py", "src/*.sql", "src/*.svelte", "src/*.vue"] },
+                       "src/*.ts", "src/*.tsx", "src/*.mts", "src/*.js", "src/*.jsx",
+                       "src/*.py", "src/*.sql", "src/*.svelte", "src/*.vue",
+                       "*/app/*.ts", "*/app/*.tsx", "app/*.ts", "app/*.tsx",
+                       "*/components/*.tsx", "components/*.tsx", "*/pages/*.tsx", "pages/*.tsx",
+                       "*/lib/*.ts", "lib/*.ts", "*/supabase/migrations/*.sql", "supabase/migrations/*.sql"] },
         // 플랜 정의는 세 훅이 같다: docs/plans/*.md 중 *.template.md 가 아닌 것
         { "not": true, "globExists": { "pattern": ["docs/plans/*.md"], "except": ["*.template.md"] } },
         { "bodySizeOver": { "lines": 20, "chars": 800 } }
       ],
       "action": "deny",
       "off": "plan-gate-off",
-      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다(템플릿 제외).\n\n할 것 — `/phase` 로 슬라이스 플랜을 먼저 쓴다. 플랜 없이 진행해야 하는 사정이면 사용자에게 알리고 결정을 받는다."
+      "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다(템플릿 제외).\n\n다음 행동 — 사용자에게 `/react-supabase-harness:phase` 실행을 요청해 슬라이스 플랜을 먼저 쓴다(스킬은 사용자 호출 전용이라 에이전트가 직접 부를 수 없다). 플랜 없이 진행해야 하는 사정이면 사용자에게 알리고 결정을 받는다."
     }
   ]
 }

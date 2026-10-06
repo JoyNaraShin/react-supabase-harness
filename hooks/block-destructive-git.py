@@ -65,12 +65,35 @@ def raw_risky(command: str) -> bool:
     return any(rx.search(command) for rx in RISKY_RAW)
 
 
+# 막힌 조작별 비파괴 대안. 이 훅에는 커밋 말고 승인 통로가 없으므로 "사용자 승인 필요"만으로는
+# 에이전트가 할 수 있는 일이 없다 — 대안이나 사용자 직접 실행을 가리켜야 한다.
+ALTERNATIVES = [
+    ("git commit", "`/commit` 스킬로 커밋 단위를 제안하고 사용자 승인을 받는다."),
+    ("--force", "`git push --force-with-lease` 를 쓴다(원격이 내가 본 상태일 때만 덮어쓴다)."),
+    ("reset --hard", "`git stash` 로 작업을 보관한 뒤 이동한다."),
+    ("checkout", "`git stash -u` 로 작업을 보관한다. 브랜치 이동이면 `git switch <브랜치>`."),
+    ("switch", "`git stash -u` 로 작업을 보관한 뒤 전환한다."),
+    ("restore", "`git stash -u` 로 작업을 보관한다(`git restore --staged` 언스테이지는 허용)."),
+    ("clean", "지울 파일을 `git clean -n` 으로 확인해 사용자에게 보여 준다."),
+    ("branch", "머지된 브랜치면 `git branch -d` 로 지운다."),
+    ("rm -r", "지울 대상을 더 깊은 구체 경로로 좁힌다(예: `rm -rf ./dist`)."),
+    ("find", "`-name` 등 필터로 대상을 좁히거나 구체 경로를 루트로 준다."),
+]
+
+
+def remediate(reason: str) -> str:
+    alt = next((a for k, a in ALTERNATIVES if k in reason), "더 좁은 비파괴 방법을 찾는다.")
+    return (reason.replace(" 사용자 승인 필요.", "").rstrip()
+            + f"\n다음 행동: {alt} 그래도 이 명령이 필요하면 이유를 사용자에게 설명하고, "
+              "사용자가 직접 `! <명령>` 으로 실행하게 하라.")
+
+
 def deny(reason: str) -> None:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }}))
+        "permissionDecisionReason": remediate(reason),
+    }}, ensure_ascii=False))
     sys.exit(0)
 
 

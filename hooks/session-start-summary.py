@@ -5,6 +5,7 @@ stdout 으로 `additionalContext` JSON 을 출력하면 Claude Code 가 세션 �
 context 에 첨부한다. Phase 추정은 브랜치명 또는 `docs/plans/phase-N-*.md` 기반.
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -23,24 +24,31 @@ def current_branch() -> str:
     return run(["git", "rev-parse", "--abbrev-ref", "HEAD"]) or "(no git)"
 
 
+def default_ref() -> str:
+    """원격 기본 브랜치(`origin/main`·`origin/master` …). origin/HEAD 가 없으면 origin/main 으로 가정."""
+    ref = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+    return ref.strip() if ref and ref.strip() else "origin/main"
+
+
 def ahead_behind(branch: str) -> str:
-    """origin/main 기준 ahead/behind 커밋 수."""
-    if branch in ("main", "(no git)"):
+    """원격 기본 브랜치 기준 ahead/behind 커밋 수."""
+    base = default_ref()
+    if branch in ("(no git)", base.split("/", 1)[-1]):
         return ""
-    raw = run(["git", "rev-list", "--left-right", "--count", f"origin/main...{branch}"])
+    raw = run(["git", "rev-list", "--left-right", "--count", f"{base}...{branch}"])
     if not raw:
         return ""
     parts = raw.split()
     if len(parts) == 2:
         behind, ahead = parts
         if int(ahead) == 0 and int(behind) == 0:
-            return "synced with origin/main"
+            return f"synced with {base}"
         segs = []
         if int(ahead) > 0:
             segs.append(f"ahead {ahead}")
         if int(behind) > 0:
             segs.append(f"behind {behind}")
-        return "vs origin/main: " + ", ".join(segs)
+        return f"vs {base}: " + ", ".join(segs)
     return ""
 
 
@@ -101,6 +109,11 @@ def main() -> None:
         f"Phase 추정: {phase}",
         f"미커밋: {uncommitted}개",
     ]
+    # 스킬·훅 메시지에 펼쳐지는 하네스 절대경로를 작업 대상으로 착각하는 일이 있었다(eval 실측) — 둘을 못박는다.
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    plugin = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if plugin and os.path.realpath(plugin) != os.path.realpath(project):
+        lines.append(f"작업 대상 = {project} · 하네스 설치 경로 {plugin} 는 규칙 문서를 읽는 곳이지 작업·리뷰 대상이 아니다")
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "SessionStart",
         "additionalContext": "\n".join(lines),

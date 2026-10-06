@@ -11,7 +11,7 @@
         ]
       },
       {
-        "matcher": "Agent|Task|SendMessage",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -29,7 +29,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|NotebookEdit|Bash",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",

@@ -46,7 +46,7 @@ CORRECTION = re.compile(
 GENERIC_RUNNER = {
     "python", "python3", "node", "bash", "sh", "zsh", "npx", "uvx", "uv",
     "deno", "bun", "ruby", "perl", "awk", "sed", "jq", "echo", "printf",
-    "cat", "eval", "env", "xargs",
+    "cat", "eval", "xargs",
 }
 # 되돌릴 수 없는 것 — 여기에 걸리면 차단. 그 외 번복은 알림만(오탐 비용이 크므로).
 IRREVERSIBLE = re.compile(
@@ -63,16 +63,38 @@ SUBCOMMAND_TOOLS = {
 }
 
 
-def cmd_shape(tool: str, ti: dict):
-    """추적 가능한 '명령 모양' 또는 None(추적 안 함)."""
-    if tool != "Bash":
-        return None
-    c = (ti.get("command") or "").strip()
-    toks = [t for t in re.split(r"\s+", c) if t]
+# "막힌다·못 한다"는 판단을 낳는 실패 — 권한·훅 거부. 일반 오류(파일 없음, 네트워크)는 판단이
+# 아니라 상황이라, 그 뒤에 다른 대상으로 성공해도 번복이 아니다(3차 리뷰: `rm -rf dist` 가
+# '없음'으로 실패한 뒤 `rm -rf node_modules` 성공에 거짓 정정을 요구했다).
+# `rejected` 는 git 의 non-fast-forward(`! [rejected]`)처럼 상황 오류에도 나와서 빼고, 훅 거부는
+# 훅 오류 표지로만 센다(4차 리뷰: pull --rebase 뒤 같은 push 성공에 하드 차단). 사용자가 승인 프롬프트를
+# 거절한 결과("The user doesn't want to proceed…")에는 이 어휘가 없어 거부로 세지 않는다 — 사용자의 결정이지 세션의 단정이 아니다.
+DENIAL = re.compile(
+    r"permission|denied|not allowed|blocked|refused|hook error|blocked by .{0,20}hook|권한|거부|차단|승인"
+    r"|operation not permitted", re.IGNORECASE)
+LEAD_STRIP = {"sudo", "doas", "command", "nohup", "time", "env", "nice", "stdbuf"}
+LONG_FLAG = {"--force": "f", "--recursive": "r", "--verbose": "v", "--all": "a"}
+
+
+def _norm_flag(t: str) -> str:
+    """`-fr` 와 `-rf` 는 같은 플래그다."""
+    return "-" + "".join(sorted(t[1:])) if re.fullmatch(r"-[A-Za-z]{2,}", t) else t
+
+
+def _segment_shape(seg: str):
+    seg = re.sub(r"\d?>>?\s*\S+|<\s*\S+", " ", seg)          # 리다이렉트는 신원이 아니다
+    toks = [t for t in re.split(r"\s+", seg.strip()) if t]
+    while toks:
+        if re.match(r"^[A-Za-z_]\w*=", toks[0]) or os.path.basename(toks[0]) in LEAD_STRIP:
+            toks = toks[1:]
+        elif os.path.basename(toks[0]) == "timeout" and len(toks) > 1:
+            toks = toks[2:]
+        else:
+            break
     if not toks:
         return None
     head = os.path.basename(toks[0]).lower()
-    if head in GENERIC_RUNNER:
+    if head in GENERIC_RUNNER or head == "cd":
         return None
     rest = toks[1:]
     parts = [head]
@@ -84,8 +106,33 @@ def cmd_shape(tool: str, ti: dict):
         if i < len(rest):
             parts.append(rest[i])
             rest = rest[i + 1:]
-    parts += [t for t in rest[:2] if t.startswith("-")]
-    return " ".join(parts)[:48]
+    # `-rf` = `-r -f` = `--recursive --force` — 짧은 플래그는 글자 집합으로, 흔한 긴 플래그는 짧은 것으로
+    letters, longs = set(), set()
+    for t in rest:
+        if re.fullmatch(r"-[A-Za-z]+", t):
+            letters.update(t[1:])
+        elif t in LONG_FLAG:
+            letters.add(LONG_FLAG[t])
+        elif t.startswith("--"):
+            longs.add(t.split("=", 1)[0])
+    flags = (["-" + "".join(sorted(letters))] if letters else []) + sorted(longs)[:2]
+    # 위치 인자도 신원이다 — 대상이 다르면 다른 명령이다. `./build/` 와 `build` 는 같은 대상.
+    args = sorted(re.sub(r"^\./|/+$", "", t) or t for t in rest if not t.startswith("-"))[:2]
+    return " ".join(parts + flags + args)[:80]
+
+
+def cmd_shapes(tool: str, ti: dict) -> list:
+    """추적 가능한 '명령 모양' 목록. `cd x && cmd` 처럼 이어진 명령은 하위 명령마다 본다."""
+    if tool != "Bash":
+        return []
+    c = (ti.get("command") or "").strip()
+    return [s for s in (_segment_shape(seg) for seg in re.split(r"&&|\|\|?|;|\n", c)) if s]
+
+
+def cmd_shape(tool: str, ti: dict):
+    """하위 호환 — 첫 하위 명령의 모양."""
+    shapes = cmd_shapes(tool, ti)
+    return shapes[0] if shapes else None
 
 
 def blocks(msg):
@@ -140,13 +187,12 @@ def main() -> None:
         if j.get("type") == "assistant":
             for b in blocks(j.get("message")):
                 if isinstance(b, dict) and b.get("type") == "tool_use":
-                    shape_of[b.get("id")] = cmd_shape(b.get("name") or "", b.get("input") or {})
+                    shape_of[b.get("id")] = cmd_shapes(b.get("name") or "", b.get("input") or {})
         elif j.get("type") == "user":
             for b in blocks(j.get("message")):
-                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error"):
-                    s = shape_of.get(b.get("tool_use_id"))
-                    if s:
-                        failed_shapes.add(s)
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error") \
+                        and DENIAL.search(str(b.get("content"))):
+                    failed_shapes.update(shape_of.get(b.get("tool_use_id")) or [])
 
     # ── 이번 턴: 실패 목록 + 성공한 명령 모양 + 최종 텍스트
     failures, succeeded, last_text = [], set(), []
@@ -160,11 +206,10 @@ def main() -> None:
             for b in blocks(j.get("message")):
                 if not (isinstance(b, dict) and b.get("type") == "tool_result"):
                     continue
-                s = shape_of.get(b.get("tool_use_id"))
                 if b.get("is_error"):
                     failures.append(str(b.get("content"))[:120].replace("\n", " "))
-                elif s:
-                    succeeded.add(s)
+                else:
+                    succeeded.update(shape_of.get(b.get("tool_use_id")) or [])
         elif t == "assistant":
             texts = [
                 b.get("text", "")

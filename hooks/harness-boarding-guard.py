@@ -122,7 +122,7 @@ def diagnose(root: Path):
 
     ph = scaffold_placeholder(root)
     if ph:
-        hard.append(f"setup.sh 미실행 — `__PROJECT_NAME__` 이 {ph} 에 살아 있다")
+        hard.append(f"템플릿 치환 미완료 — `__PROJECT_NAME__` 이 {ph} 에 살아 있다(템플릿의 셋업 스크립트를 돌리거나 직접 치환)")
     if not in_git_repo(root):
         hard.append("git 저장소 없음 — /issue·/branch·/commit·/pr 이 붙을 데가 없다")
 

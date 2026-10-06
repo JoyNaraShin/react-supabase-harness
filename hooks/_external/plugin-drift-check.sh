@@ -149,11 +149,12 @@ if problems:
         out.append(f"  · {fact}")
         out.append(f"      → {fix}")
     if hooks_down:
+        down = locals().get("missing") or expected   # 계산한 목록을 그대로 보여 준다(하드코딩 금지)
         out += [
             "",
-            "  지금 이 세션에는 block-impl-delegation(구현 위임 차단) · workflow-entry-guard",
-            "  (플랜 없이 코드 시작 감지) · harness-boarding-guard(미탑승 적출) · stack-compliance",
-            "  -guard 가 **하나도 붙어 있지 않다**. 규정은 컨텍스트에 상주하지 않으므로,",
+            f"  지금 이 세션에는 다음 훅이 붙어 있지 않다({len(down)}/{len(expected)}개):",
+            *[f"    · {h.rsplit('.', 1)[0]}" for h in down[:14]],
+            "  규정은 컨텍스트에 상주하지 않으므로,",
             "  이 상태에서는 하네스 규약을 세션이 기억해야만 지켜진다 — 규칙 텍스트만으로는 반복해서 실패했다.",
             "",
             "  구현에 착수하기 전에 사용자에게 이 사실을 먼저 보고하라. 조용히 진행하지 말 것.",

@@ -20,6 +20,7 @@ HOOKS = ROOT / "hooks"
 
 # import 구문 픽스처. 한 덩어리로 적으면 설치된 구버전 게이트가 이 파일 자체를 막으므로 패키지명 앞에서 끊는다.
 IMPORT_MUI = "import { Button } from " + '"' + "@mui/material" + '";'
+ADD_UI_LIB = "pnpm add " + "an" + "td"
 
 
 def run_hook(name: str, payload, env: dict | None = None, cwd: str | None = None) -> dict | None:
@@ -363,46 +364,66 @@ class DelegationTest(unittest.TestCase):
         return run_hook(hook, {"tool_name": "Agent",
                                "tool_input": {"subagent_type": subagent_type, "prompt": prompt}})
 
-    def test_implementation_delegation_denied(self):
-        self.assertTrue(denied(self.agent("block-impl-delegation.py", "general-purpose",
-                                          "src/features/cart/api.ts 파일을 구현해라. 결과는 /tmp/o.md")))
+    # block-impl-delegation — 스폰 문구가 아니라 서브에이전트의 실제 쓰기를 본다
+    def sub(self, tool, ti, agent="general-purpose", proj=None, agent_id="a1"):
+        payload = {"tool_name": tool, "tool_input": ti, "agent_type": agent, "cwd": str(proj)}
+        if agent_id:
+            payload["agent_id"] = agent_id
+        return run_hook("block-impl-delegation.py", payload, env={"CLAUDE_PROJECT_DIR": str(proj)})
 
-    def test_reviewer_delegation_passes(self):
-        self.assertIsNone(self.agent("block-impl-delegation.py", "craft-reviewer",
-                                     "src/features/cart/api.ts 리뷰. 결과는 /tmp/o.md"))
+    def test_subagent_code_zone_writes_are_denied(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            for tool, ti in [("Write", {"file_path": str(p / "src/features/cart/api.ts"), "content": "x"}),
+                             ("Edit", {"file_path": str(p / "supabase/migrations/1_init.sql"), "new_string": "x"}),
+                             ("Edit", {"file_path": "package.json", "new_string": "x"}),
+                             ("Bash", {"command": "cat > src/App.tsx <<'EOF'\nexport {}\nEOF"}),
+                             ("Bash", {"command": "sed -i '' 's/a/b/' src/lib/format.ts"}),
+                             ("Bash", {"command": "cp /tmp/x.ts src/x.ts"}),
+                             ("Bash", {"command": "git apply /tmp/p.patch"})]:
+                with self.subTest(tool=tool, ti=json.dumps(ti)[:70]):
+                    out = self.sub(tool, ti, proj=p)
+                    self.assertTrue(denied(out))
+                    self.assertIn("다음 행동", reason(out))
 
-    def test_user_approved_bypass(self):
-        self.assertIsNone(self.agent("block-impl-delegation.py", "general-purpose",
-                                     "[HARNESS: 구현위임 승인됨] src/a.ts 를 구현해라."))
+    def test_subagent_non_code_writes_pass(self):
+        # 리서치 산출·plan 작성·읽기·브라우저 조작 같은 기계 실행 위임은 막지 않는다
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            for agent, tool, ti in [
+                ("general-purpose", "Write", {"file_path": "/tmp/r/cart-ledger.md", "content": "x"}),
+                ("react-supabase-harness:planner", "Write", {"file_path": str(p / "docs/plans/phase-1.md"),
+                                                             "content": "x"}),
+                ("general-purpose", "Bash", {"command": "cat src/a.ts > /tmp/copy.ts"}),
+                ("general-purpose", "Bash", {"command": "rg TODO src > /tmp/todo.txt"}),
+                ("general-purpose", "Bash", {"command": "git diff src/ > /tmp/d.patch"})]:
+                with self.subTest(agent=agent, ti=json.dumps(ti)[:70]):
+                    self.assertIsNone(self.sub(tool, ti, agent=agent, proj=p))
 
-    def test_delegation_corpus(self):
-        # 미탐과 오탐을 한 코퍼스로 고정
-        hook = "block-impl-delegation.py"
-        for t, p in [("general-purpose", "src/a.ts 의 버그를 수정해줘"),
-                     ("general-purpose", "src/a.ts 에 검증 로직을 추가해줘"),
-                     ("general-purpose", "fix the bug in src/lib/format.ts"),
-                     ("general-purpose", "update src/App.tsx to use the new layout"),
-                     ("my-research-impl", "src/a.ts 를 구현해라")]:
-            with self.subTest(t=t, p=p):
-                self.assertTrue(denied(self.agent(hook, t, p)))
-        for t, p in [("react-supabase-harness:planner", "plan 작성해. 대상 파일 docs/plans/phase-1.md, src/ 참고"),
-                     ("general-purpose", "레포를 감사하라. 파일 수정 금지. 결과를 /tmp/a/report.md 에 작성하라. hooks/x.py 를 읽어라"),
-                     ("general-purpose", "Audit hooks/x.py. Write your report to /tmp/r.md. Do not modify files."),
-                     ("general-purpose", "파일 쓰기·편집 툴(Write/Edit)이 src/ 에 닿는지 조사"),
-                     ("Plan", "src/ 구조를 바꿀 계획을 세워라")]:
-            with self.subTest(t=t, p=p):
-                self.assertIsNone(self.agent(hook, t, p))
-        send = lambda to, m: run_hook(hook, {"tool_name": "SendMessage", "tool_input": {"to": to, "message": m}})
-        self.assertIsNone(send("main", "src/a.ts 를 수정해야 할 것 같습니다 — 보고"))
-        self.assertTrue(denied(send("code-reviewer", "src/a.ts 를 구현해라")))  # 수신자 이름은 타입 근거가 아니다
+    def test_main_session_writes_are_not_judged(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            self.assertIsNone(self.sub("Write", {"file_path": str(p / "src/a.ts"), "content": "x"},
+                                       proj=p, agent_id=None))
 
-    def test_resuming_an_agent_with_implementation_work_is_denied(self):
-        # SendMessage 재개는 새 스폰과 같은 위임이다
-        out = run_hook("block-impl-delegation.py", {"tool_name": "SendMessage", "tool_input": {
-            "to": "helper", "message": "이어서 src/features/cart/api.ts 를 구현해라."}})
-        self.assertTrue(denied(out))
-        self.assertIsNone(run_hook("block-impl-delegation.py", {"tool_name": "SendMessage", "tool_input": {
-            "to": "helper", "message": "진행 상황만 알려줘."}}))
+    def test_user_listed_writer_type_may_write_code(self):
+        # 위임 예외는 사용자가 프로젝트 룰 파일에 적는다(그 파일은 gate-engine 이 에이전트 쓰기로부터 보호)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / ".claude" / "gates").mkdir(parents=True)
+            (p / ".claude" / "gates" / "rules.jsonc").write_text(
+                '{ // 사용자 예외\n "delegation": {"writers": ["worktree-builder"]}, }')
+            ti = {"file_path": str(p / "src/a.ts"), "content": "x"}
+            self.assertIsNone(self.sub("Write", ti, agent="my-plugin:worktree-builder", proj=p))
+            self.assertTrue(denied(self.sub("Write", ti, agent="general-purpose", proj=p)))
+
+    def test_symlinked_alias_into_code_zone_is_denied(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / "src").mkdir()
+            os.symlink(p / "src", p / "alias")
+            self.assertTrue(denied(self.sub("Write", {"file_path": str(p / "alias/a.ts"), "content": "x"},
+                                            proj=p)))
 
     def test_long_agent_without_output_file_denied(self):
         self.assertTrue(denied(self.agent("require-agent-output-file.py", "general-purpose", "시장 조사해줘")))
@@ -482,7 +503,8 @@ class ReportFailuresTest(unittest.TestCase):
         self.assertIsNone(self.stop(lines))
 
     def test_reversible_reversal_only_notifies(self):
-        lines = [user_text("a"), tool_use("a", "vercel ls"), tool_result("a", True), say("실패했습니다."),
+        lines = [user_text("a"), tool_use("a", "vercel ls"), tool_result("a", True, "permission denied"),
+                 say("실패했습니다."),
                  user_text("b"), tool_use("b", "vercel ls"), tool_result("b", False), say("목록입니다.")]
         out = self.stop(lines)
         self.assertFalse(blocked(out))
@@ -510,10 +532,51 @@ class ReportFailuresTest(unittest.TestCase):
         self.assertIsNone(self.stop(lines))
 
     def test_irreversible_git_reversal_blocks(self):
-        lines = [user_text("a"), tool_use("a", "git push origin main"), tool_result("a", True, "rejected"),
+        lines = [user_text("a"), tool_use("a", "git push origin main"), tool_result("a", True, "Permission to use Bash has been denied"),
                  say("push 가 거부돼 실패했습니다."),
                  user_text("b"), tool_use("b", "git push origin main"), tool_result("b", False), say("올렸습니다.")]
         self.assertTrue(blocked(self.stop(lines)))
+
+    def test_situational_rejection_and_user_decline_are_not_denials(self):
+        # 4차 리뷰 N12: non-fast-forward 거절 뒤 pull --rebase → 같은 push 성공, 사용자가 거절했다가 나중에 허락
+        for content in ["! [rejected] main -> main (non-fast-forward)\nerror: failed to push some refs",
+                        "The user doesn't want to proceed with this tool use. The tool use was rejected."]:
+            with self.subTest(content=content[:30]):
+                lines = [user_text("a"), tool_use("a", "git push origin feat/x"), tool_result("a", True, content),
+                         say("push 가 실패했습니다."),
+                         user_text("b"), tool_use("b", "git push origin feat/x"), tool_result("b", False),
+                         say("푸시했습니다.")]
+                self.assertFalse(blocked(self.stop(lines)))
+
+    def test_equivalent_command_forms_share_an_identity(self):
+        # 4차 리뷰 R28: 플래그 표기·경로 표기·런처·리다이렉트가 달라도 같은 명령이다
+        mod = load_module("report-failures-gate.py")
+        base = mod.cmd_shapes("Bash", {"command": "rm -rf build"})
+        for c in ["rm -r -f build", "rm --recursive --force ./build/", "env rm -rf build",
+                  "timeout 10 rm -rf build", "rm -rf build 2>/dev/null", "rm -rf build | cat"]:
+            with self.subTest(c=c):
+                self.assertEqual(mod.cmd_shapes("Bash", {"command": c})[0], base[0])
+        self.assertEqual(mod.cmd_shapes("Bash", {"command": "git push -f origin main"}),
+                         mod.cmd_shapes("Bash", {"command": "git push --force origin main"}))
+
+    def test_ordinary_failure_then_other_target_is_not_a_reversal(self):
+        # A38: 판단이 아니라 상황인 실패(없음·네트워크) 뒤의 다른 대상 성공에 거짓 정정을 요구했다
+        for first, err, second in [("rm -rf dist", "No such file or directory", "rm -rf node_modules"),
+                                   ("git push origin feat-a", "Could not resolve host", "git push origin feat-b"),
+                                   ("rm -rf dist", "No such file or directory", "rm -rf dist")]:
+            with self.subTest(first=first, second=second):
+                lines = [user_text("a"), tool_use("a", first), tool_result("a", True, err), say("실패했습니다."),
+                         user_text("b"), tool_use("b", second), tool_result("b", False), say("됐습니다.")]
+                self.assertIsNone(self.stop(lines))
+
+    def test_denied_command_shapes_are_normalized(self):
+        # A37: 같은 명령을 이어 붙이거나 플래그 순서만 바꿔도 번복은 번복이다
+        for second in ["rm -fr cache", "cd . && rm -rf cache", "sudo rm -rf cache"]:
+            with self.subTest(second=second):
+                lines = [user_text("a"), tool_use("a", "rm -rf cache"), tool_result("a", True, "denied by hook"),
+                         say("실패했습니다."),
+                         user_text("b"), tool_use("b", second), tool_result("b", False), say("삭제했습니다.")]
+                self.assertTrue(blocked(self.stop(lines)))
 
     def test_generic_interpreters_are_not_tracked(self):
         lines = [user_text("a"), tool_use("a", "python3 -"), tool_result("a", True), say("실패했습니다."),
@@ -556,6 +619,19 @@ class CommitBoundaryTest(unittest.TestCase):
         self.assertIn("미커밋 변경", context(out))
         self.assertFalse(blocked(out))  # 알림만 — 차단하지 않는다
         self.assertIsNone(self.stop())  # 같은 띠에서 반복 금지
+
+    def test_new_directory_counts_each_file(self):
+        # A41: 새 feature 폴더 하나(파일 25개)가 porcelain 에서 한 줄로 접혀 1개로 세였다
+        d = self.repo / "src" / "features" / "cart"
+        d.mkdir(parents=True)
+        for i in range(25):
+            (d / f"f{i}.ts").write_text(str(i))
+        self.assertIn("25개", context(self.stop()))
+
+    def test_incidental_staged_word_does_not_mark_band_handled(self):
+        self.files(25)
+        out = self.stop(last_assistant_message="I staged nothing yet.")
+        self.assertIn("미커밋 변경", context(out))
 
     def test_state_file_stays_out_of_the_repo(self):
         self.files(25)
@@ -766,22 +842,14 @@ class SecondReverifyRegressionTest(unittest.TestCase):
             rules_in_root = edit("/opt/plugroot/gates/rules.jsonc", "{}")
             self.assertTrue(denied(gate(rules_in_root, CLAUDE_PLUGIN_ROOT="/opt/plugroot")))
 
-    def test_delegation_verbs_and_noise(self):
-        def spawn(p):
-            return run_hook("block-impl-delegation.py", {"tool_name": "Agent", "tool_input": {
-                "prompt": p, "subagent_type": "general-purpose"}})
-        for p, want in [("src/auth.ts 에 로그인 로직을 구현할 것", True),
-                        ("src/auth.ts 를 다음 스펙대로 구현하시오", True),
-                        ("이 패치를 src/a.ts 에 적용해줘", True),
-                        ("src/components/Button.tsx 를 생성해", True),
-                        ("Rewrite src/a.ts to use hooks", True),
-                        ("결과 화면 컴포넌트 src/Result.tsx 를 작성해", True),
-                        ("Do not modify tests, just implement src/a.ts", True),
-                        ("Review the change in src/a.ts and verify the fix. 결과를 /tmp/r.md 에 저장", False),
-                        ("src/a.ts 를 읽고 고쳐야 할 점을 나열하라. 결과를 /tmp/r.md 에 저장", False),
-                        ("list what to fix in src/a.ts; save your report to /tmp/r.md", False)]:
+    def test_spawn_prompt_wording_is_no_longer_judged(self):
+        # 문구 판정은 표현 변형에 놓치고 정상 리서치 지시를 막았다(3차 리뷰). 스폰 자체는 통과하고,
+        # 판정은 서브에이전트가 실제로 코드 영역을 쓰려는 순간에 한다.
+        for p in ["src/auth.ts 에 로그인 로직을 구현할 것",
+                  "Audit src/ for security issues. Create a table of findings in /tmp/r/r.md."]:
             with self.subTest(p=p):
-                self.assertEqual(denied(spawn(p)), want)
+                self.assertIsNone(run_hook("block-impl-delegation.py", {"tool_name": "Agent", "tool_input": {
+                    "prompt": p, "subagent_type": "general-purpose"}}))
 
 
 class BoardingGuardTest(unittest.TestCase):
@@ -853,6 +921,23 @@ class ManifestTest(unittest.TestCase):
             with self.subTest(f=f.relative_to(ROOT)):
                 self.assertEqual(bare.findall(f.read_text()), [])
 
+    def test_skill_fallback_templates_pass_the_output_file_hook(self):
+        # K02: 스킬이 처방한 general-purpose 폴백을 하네스 자신의 훅이 막았다. 템플릿을 고칠 때마다
+        # 이 테스트가 처방과 집행의 일치를 다시 확인한다.
+        import re
+        found = 0
+        for f in (ROOT / "skills").glob("*/SKILL.md"):
+            for line in f.read_text().splitlines():
+                m = re.match(r"\s*> (You are running as .*)", line)
+                if not m:
+                    continue
+                found += 1
+                prompt = m.group(1).replace("<scratchpad>", "/tmp/sp")
+                with self.subTest(f=f.parent.name):
+                    self.assertIsNone(run_hook("require-agent-output-file.py", {"tool_name": "Agent", "tool_input": {
+                        "subagent_type": "general-purpose", "prompt": prompt}}))
+        self.assertGreaterEqual(found, 5)
+
     def test_hook_output_has_no_unexpanded_plugin_root(self):
         # 훅 출력 텍스트는 치환되지 않는다. 훅이 환경변수로 직접 풀어야 한다.
         with tempfile.TemporaryDirectory() as d:
@@ -865,5 +950,277 @@ class ManifestTest(unittest.TestCase):
         self.assertIn("/opt/plugin-root/docs/BOOTSTRAP.md", text)
 
 
+class ThirdReviewSelfProtectionTest(unittest.TestCase):
+    """3차 리뷰(2026-10-06) 자기보호 결함 회귀 — 설치본 코드·별칭 링크·비활성화 경로, 그리고 과차단."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self.tmp.name)
+        (self.proj / "package.json").write_text("{}")
+        (self.proj / "supabase").mkdir()
+        self.cache = str(Path.home() / ".claude/plugins/cache/react-supabase/react-supabase-harness/0.31.0")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def gate(self, payload):
+        return run_hook("gate-engine.py", payload, env={"CLAUDE_PROJECT_DIR": str(self.proj)})
+
+    def bash(self, c):
+        return self.gate({"tool_name": "Bash", "tool_input": {"command": c}})
+
+    def test_installed_plugin_code_is_protected(self):
+        # 훅 파일 하나를 고치면 모든 게이트가 꺼진다 — 룰 파일만 지키던 결함
+        for payload in [
+            {"tool_name": "Edit", "tool_input": {"file_path": self.cache + "/hooks/gate-engine.py",
+                                                 "old_string": "a", "new_string": "b"}},
+            {"tool_name": "Write", "tool_input": {"file_path": self.cache + "/hooks/hooks.json", "content": "{}"}},
+            {"tool_name": "Bash", "tool_input": {"command": "chmod -x ~/.claude/plugins/cache/x/hooks/gate-engine.py"}},
+            {"tool_name": "Bash", "tool_input": {"command": "echo '{}' > ~/.claude/plugins/cache/x/hooks/hooks.json"}},
+        ]:
+            with self.subTest(p=json.dumps(payload)[:80]):
+                self.assertTrue(denied(self.gate(payload)))
+
+    def test_reading_installed_plugin_and_plugin_data_passes(self):
+        for c in ["cat ~/.claude/plugins/cache/x/hooks/hooks.json",
+                  "cp ~/.claude/plugins/cache/x/README.md /tmp/readme.md",
+                  "grep -r deny ~/.claude/plugins/cache/x/hooks > /tmp/hits.txt"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.bash(c))
+        self.assertIsNone(self.gate({"tool_name": "Write", "tool_input": {
+            "file_path": str(Path.home() / ".claude/plugins/data/some-plugin/state.json"), "content": "{}"}}))
+
+    def test_symlink_alias_cannot_reach_gate_files(self):
+        (self.proj / ".claude" / "gates").mkdir(parents=True)
+        (self.proj / ".claude" / "gates" / "rules.jsonc").write_text("{}")
+        self.assertTrue(denied(self.bash("ln -s .claude cfg")))
+        os.symlink(self.proj / ".claude", self.proj / "cfg")       # 사용자가 미리 만든 링크라고 가정
+        self.assertTrue(denied(self.gate({"tool_name": "Write", "tool_input": {
+            "file_path": str(self.proj / "cfg" / "gates" / "rules.jsonc"), "content": "{}"}})))
+        self.assertTrue(denied(self.bash("cp /tmp/empty cfg/gates/rules.jsonc")))
+
+    def test_plugin_cannot_be_disabled_by_agent(self):
+        s = self.proj / ".claude" / "settings.json"
+        s.parent.mkdir(parents=True)
+        s.write_text('{\n  "enabledPlugins": {\n    "react-supabase-harness@react-supabase": true,\n'
+                     '    "other@x": true\n  }\n}\n')
+        flip = {"tool_name": "Edit", "tool_input": {"file_path": str(s), "old_string": "react-supabase\": true",
+                                                    "new_string": "react-supabase\": false"}}
+        drop = {"tool_name": "Edit", "tool_input": {
+            "file_path": str(s), "old_string": '    "react-supabase-harness@react-supabase": true,\n',
+            "new_string": ""}}
+        other = {"tool_name": "Edit", "tool_input": {"file_path": str(s), "old_string": '"other@x": true',
+                                                     "new_string": '"other@x": false'}}
+        self.assertTrue(denied(self.gate(flip)))
+        self.assertTrue(denied(self.gate(drop)))
+        self.assertIsNone(self.gate(other))                      # 다른 플러그인은 사용자 자유
+        for c in ["claude plugin disable react-supabase-harness",
+                  "claude plugin uninstall react-supabase-harness@react-supabase"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.bash(c)))
+        self.assertIsNone(self.bash("claude plugin disable some-other-plugin"))
+
+    def test_protected_name_in_read_output_is_not_a_write(self):
+        # 과차단 회귀: 보호 이름 언급 + 다른 곳으로의 리다이렉트를 쓰기로 오판했다
+        for c in ["rg 'gate-off' hooks/ > /tmp/out.txt",
+                  "echo 'see rules.jsonc' > notes.md",
+                  "grep -c plan-gate-off docs/*.md > /tmp/count",
+                  "npm test 2>&1 | tee test.log  # gate-off tests",
+                  "mkdir -p .claude/state"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.bash(c))
+
+    def test_output_file_rule_matches_harness_own_workflows(self):
+        # K01: /phase 가 처방한 planner 스폰을 하네스 자신이 막았다
+        def spawn(t, p):
+            return run_hook("require-agent-output-file.py", {"tool_name": "Agent", "tool_input": {
+                "subagent_type": t, "prompt": p}})
+        self.assertIsNone(spawn("react-supabase-harness:planner",
+                                "대상 파일: docs/plans/phase-1-board.md / 모드: create / Tier: Phase"))
+        self.assertIsNone(spawn("fork", "Continue."))
+        # A40: 읽을 경로 옆의 report 는 산출 지시가 아니고, 면제는 이름 전체 일치만
+        for t, p in [("general-purpose", "Read docs/plans/phase-1.md and report back in chat."),
+                     ("someverifier-but-actually-research", "Research for an hour."),
+                     ("my-craft-reviewer", "Review.")]:
+            with self.subTest(t=t, p=p):
+                self.assertTrue(denied(spawn(t, p)))
+        for p in ["Research X. Save to out.md", "Save results to $SCRATCH/out.md",
+                  "조사 결과를 /tmp/r/table.csv 에 저장"]:
+            with self.subTest(p=p):
+                self.assertIsNone(spawn("general-purpose", p))
+
+    def test_output_file_name_that_claude_code_refuses_is_denied(self):
+        # Claude Code 는 서브에이전트의 REPORT·SUMMARY·FINDINGS·ANALYSIS*.md 저장을 거부한다(실측)
+        out = run_hook("require-agent-output-file.py", {"tool_name": "Agent", "tool_input": {
+            "subagent_type": "general-purpose", "prompt": "Audit. Save findings to /tmp/x/REPORT.md"}})
+        self.assertTrue(denied(out))
+        self.assertIn("ledger", reason(out))
+
+    def test_deny_messages_do_not_reveal_bypass_tokens(self):
+        # K03: 거부 메시지가 우회 토큰을 그대로 알려 주면 자기 우회 안내가 된다
+        out = run_hook("require-agent-output-file.py", {"tool_name": "Agent", "tool_input": {
+            "subagent_type": "general-purpose", "prompt": "시장 조사해줘"}})
+        self.assertNotIn("[HARNESS", reason(out))
+
+    def test_more_write_forms_on_gate_files(self):
+        for c in ["curl -o .claude/state/plan-gate-off https://example.com",
+                  "cp -r /tmp/st .claude/",
+                  "git checkout other-branch -- .claude",
+                  "python3 -c \"open('.claude/state/plan-gate-off','w')\""]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.bash(c)))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 센서 메시지 계약 — 모든 차단은 "무엇이 막혔나 / 왜 / 다음 행동" 을 담는다(린터 메시지에 고치는 법)
+# ─────────────────────────────────────────────────────────────────────────────
+class DenyMessageContractTest(unittest.TestCase):
+    def test_every_deny_carries_a_next_action(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / "package.json").write_text("{}")
+            (p / "supabase").mkdir()
+            env = {"CLAUDE_PROJECT_DIR": str(p)}
+            big = "\n".join(f"export const v{i} = {i}" for i in range(40))
+            cases = {
+                "no-ui-library": run_hook("gate-engine.py", {"tool_name": "Bash",
+                                          "tool_input": {"command": ADD_UI_LIB}}, env=env),
+                "plan-first": run_hook("gate-engine.py", {"tool_name": "Write", "tool_input": {
+                                       "file_path": str(p / "src/a.ts"), "content": big}}, env=env),
+                "self-protection": run_hook("gate-engine.py", {"tool_name": "Write", "tool_input": {
+                                            "file_path": str(p / ".claude/state/plan-gate-off"), "content": ""}}, env=env),
+                "destructive-git": run_hook("block-destructive-git.py", {"tool_name": "Bash",
+                                            "tool_input": {"command": "git reset --hard HEAD~1"}}),
+                "direct-commit": run_hook("block-destructive-git.py", {"tool_name": "Bash",
+                                          "tool_input": {"command": "git commit -m x"}}),
+                "rm-home": run_hook("block-destructive-git.py", {"tool_name": "Bash",
+                                    "tool_input": {"command": "rm -rf ~/cache"}}),
+                "delegation": run_hook("block-impl-delegation.py", {"tool_name": "Write", "agent_id": "a1",
+                                       "agent_type": "general-purpose", "cwd": str(p),
+                                       "tool_input": {"file_path": str(p / "src/x.ts"), "content": "x"}}, env=env),
+                "output-file": run_hook("require-agent-output-file.py", {"tool_name": "Agent", "tool_input": {
+                                        "subagent_type": "general-purpose", "prompt": "시장 조사해줘"}}),
+            }
+            for name, out in cases.items():
+                with self.subTest(gate=name):
+                    self.assertTrue(denied(out), f"{name} 이 막히지 않았다 — 픽스처 확인")
+                    self.assertIn("다음 행동", reason(out))
+
+
+class SessionSummaryPathTest(unittest.TestCase):
+    def test_names_project_and_plugin_root_apart(self):
+        # 회귀(eval): 소형 모델이 스킬에 펼쳐진 하네스 절대경로를 작업 대상으로 착각해 그쪽으로 cd 했다
+        with tempfile.TemporaryDirectory() as d:
+            out = run_hook("session-start-summary.py", {}, env={"CLAUDE_PROJECT_DIR": d}, cwd=d)
+            ctx = context(out)
+            self.assertIn(f"작업 대상 = {d}", ctx)
+            self.assertIn("작업·리뷰 대상이 아니다", ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4차 적대 리뷰(v0.32.0 수정분 재검증) 회귀 — 우회는 막히고, 과차단은 풀린 채로
+# ─────────────────────────────────────────────────────────────────────────────
+class FourthReviewRegressionTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.proj = Path(self.tmp.name)
+        (self.proj / "package.json").write_text("{}")
+        (self.proj / "supabase").mkdir()
+        (self.proj / "src" / "feat").mkdir(parents=True)
+        (self.proj / ".claude").mkdir()
+        self.settings = self.proj / ".claude" / "settings.json"
+        self.settings.write_text(json.dumps({"enabledPlugins": {"react-supabase-harness@react-supabase": True},
+                                             "permissions": {"allow": []}}))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def gate(self, tool, ti):
+        return run_hook("gate-engine.py", {"tool_name": tool, "tool_input": ti},
+                        env={"CLAUDE_PROJECT_DIR": str(self.proj)}, cwd=str(self.proj))
+
+    def sub(self, tool, ti):
+        return run_hook("block-impl-delegation.py", {"tool_name": tool, "tool_input": ti, "agent_id": "a1",
+                                                     "agent_type": "general-purpose", "cwd": str(self.proj)},
+                        env={"CLAUDE_PROJECT_DIR": str(self.proj)})
+
+    def test_settings_rewrites_that_drop_the_harness_are_denied(self):
+        s = str(self.settings)
+        for tool, ti in [("Write", {"file_path": s, "content": "{}"}),
+                         ("MultiEdit", {"file_path": s, "edits": [{"old_string": "true", "new_string": "false"}]}),
+                         ("Bash", {"command": "jq 'del(.enabledPlugins)' .claude/settings.json | sponge .claude/settings.json"}),
+                         ("Bash", {"command": "jq . .claude/settings.json > /tmp/s && mv /tmp/s .claude/settings.json"}),
+                         ("Bash", {"command": "rm .claude/settings.json"}),
+                         ("Bash", {"command": "git checkout -- .claude/settings.json"}),
+                         ("Bash", {"command": "rm -rf ~/.claude/plugins"}),
+                         ("Bash", {"command": "mv ~/.claude/plugins ~/.claude/plugins.bak"})]:
+            with self.subTest(tool=tool, ti=json.dumps(ti)[:60]):
+                out = self.gate(tool, ti)
+                self.assertTrue(denied(out))
+                self.assertIn("다음 행동", reason(out))
+
+    def test_settings_edits_that_keep_the_harness_pass(self):
+        keep = json.dumps({"enabledPlugins": {"react-supabase-harness@react-supabase": True},
+                           "permissions": {"allow": ["Bash(ls)"]}})
+        for tool, ti in [("Write", {"file_path": str(self.settings), "content": keep}),
+                         ("Edit", {"file_path": str(self.settings), "old_string": '"allow": []',
+                                   "new_string": '"allow": ["Bash(ls)"]'}),
+                         ("Bash", {"command": "cat .claude/settings.json > /tmp/settings-copy.json"}),
+                         ("Bash", {"command": "ls ~/.claude/plugins"})]:
+            with self.subTest(tool=tool):
+                self.assertIsNone(self.gate(tool, ti))
+
+    def test_data_in_heredocs_and_quotes_is_not_a_command(self):
+        for c in ["cat > /tmp/ledger.md <<'EOF'\n| N1 | rm .claude/state/plan-gate-off was mentioned |\nEOF",
+                  "echo 'a -> .claude/state/x' > /tmp/n.txt"]:
+            with self.subTest(c=c[:40]):
+                self.assertIsNone(self.gate("Bash", {"command": c}))
+        # 셸이 읽는 heredoc 과 bash -c 인자는 실행된다
+        self.assertTrue(denied(self.gate("Bash", {"command": "bash <<'EOF'\ntouch .claude/state/plan-gate-off\nEOF"})))
+        self.assertTrue(denied(self.gate("Bash", {"command": "bash -c 'touch .claude/state/ui-lib-gate-off'"})))
+
+    def test_subagent_common_write_forms_are_denied(self):
+        for c in ["cd src && cat > a.ts <<'EOF'\nexport {}\nEOF", "(cd src; touch new.ts)", "cp /tmp/a.ts src/",
+                  "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +", "grep -rl foo src | xargs sed -i '' 's/a/b/'",
+                  "dd if=/tmp/a of=src/a.ts", "git switch main", "git stash", "git clean -fd src",
+                  "git -c core.x=y checkout -- src"]:
+            with self.subTest(c=c[:40]):
+                self.assertTrue(denied(self.sub("Bash", {"command": c})))
+        for f in ["index.html", "tailwind.config.ts", "theme/tokens.css"]:
+            with self.subTest(f=f):
+                self.assertTrue(denied(self.sub("Write", {"file_path": str(self.proj / f), "content": "x"})))
+
+    def test_subagent_reads_and_other_repos_pass(self):
+        for c in ["rg 'git checkout' hooks/", 'grep -n "git reset" src/App.tsx', "git -C /tmp/other checkout main",
+                  "git stash list", "echo 'a -> src/App.tsx' > /tmp/n.txt",
+                  "cat > /tmp/r/ledger.md <<'EOF'\n| F1 | src/App.tsx | rm src/legacy.ts |\nEOF"]:
+            with self.subTest(c=c[:40]):
+                self.assertIsNone(self.sub("Bash", {"command": c}))
+
+    def test_monorepo_install_forms_and_unrelated_segments(self):
+        lib = "an" + "td"
+        for c in [f"pnpm -F web add {lib}", f"yarn workspace web add {lib}", f"npm --prefix web install {lib}",
+                  f"npm in {lib}", f"deno add npm:{lib}", "pnpx shadcn init"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.gate("Bash", {"command": c})))
+        for c in [f"pnpm add zod && grep -r {lib} src/", "pnpm -F web add zod"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.gate("Bash", {"command": c}))
+
+    def test_plan_first_covers_the_code_zone_directories(self):
+        big = "\n".join(f"export const v{i} = {i}" for i in range(40))
+        for f in ["app/page.tsx", "components/Button.tsx", "supabase/migrations/001_init.sql"]:
+            with self.subTest(f=f):
+                self.assertTrue(denied(self.gate("Write", {"file_path": str(self.proj / f), "content": big})))
+
+    def test_output_file_exemptions_are_exact(self):
+        def agent(t, p):
+            return run_hook("require-agent-output-file.py", {"tool_name": "Agent",
+                                                             "tool_input": {"subagent_type": t, "prompt": p}})
+        self.assertTrue(denied(agent("other-plugin:explore", "find it")))
+        self.assertIsNone(agent("react-supabase-harness:verifier", "run"))
+        self.assertIsNone(agent("general-purpose", "research and save to /tmp/r/report-ledger.md"))
