@@ -3,7 +3,7 @@
 
 RULES §12 「실패·차단·우회는 성공과 같은 비중으로 보고한다」·「틀린 단정은 정정을 먼저」의 **집행자**.
 
-왜 규칙이 아니라 게이트인가 (2026-08-17 실측):
+왜 규칙이 아니라 게이트인가 (실측):
     같은 세션에서 툴 실패 5건 중 4건은 보고하고 1건(권한 거부)을 뺐다. 우회에 성공했으니
     보고할 게 없다고 *내가* 판단한 것인데, 그건 사용자 판단이다. 사용자가 지적하기 전까지
     드러나지 않았고, 세션의 자가 검출률은 0이었다. 규칙 텍스트로 막힐 결함이 아니다.
@@ -38,7 +38,7 @@ CORRECTION = re.compile(
     re.IGNORECASE,
 )
 
-# 🔴 신원이 없는 것은 추적하지 않는다 (2026-08-17 첫 실사용에서 오탐 2건 즉시 발생).
+# 🔴 신원이 없는 것은 추적하지 않는다 (첫 실사용에서 오탐이 바로 났다).
 #    · 비-Bash 툴(Edit/Write/Read…) — 툴 이름만으로는 모든 호출이 서로 충돌한다.
 #      "이 Edit 이 막혔다"가 "모든 Edit 이 막혔다"가 되어 다음 Edit 성공에 발동했다.
 #    · 범용 인터프리터 — 스크립트가 stdin·인자에 있어 명령 문자열에 신원이 없다.
@@ -56,6 +56,13 @@ IRREVERSIBLE = re.compile(
 )
 
 
+# 하위 명령이 신원의 일부인 도구 — `git status` 실패와 `git push` 성공은 다른 명령이다.
+SUBCOMMAND_TOOLS = {
+    "git", "gh", "npm", "pnpm", "yarn", "bun", "brew", "docker", "supabase", "vercel",
+    "kubectl", "cargo", "go", "pip", "pip3", "claude",
+}
+
+
 def cmd_shape(tool: str, ti: dict):
     """추적 가능한 '명령 모양' 또는 None(추적 안 함)."""
     if tool != "Bash":
@@ -67,8 +74,18 @@ def cmd_shape(tool: str, ti: dict):
     head = os.path.basename(toks[0]).lower()
     if head in GENERIC_RUNNER:
         return None
-    flags = [t for t in toks[1:3] if t.startswith("-")]
-    return " ".join([head, *flags])[:40]
+    rest = toks[1:]
+    parts = [head]
+    if head in SUBCOMMAND_TOOLS:
+        # 전역 옵션(`git -C dir`)을 건너뛰고 첫 위치 인자를 하위 명령으로 본다.
+        i = 0
+        while i < len(rest) and rest[i].startswith("-"):
+            i += 2 if rest[i] in ("-C", "-c", "--git-dir", "--work-tree", "--filter", "--dir") else 1
+        if i < len(rest):
+            parts.append(rest[i])
+            rest = rest[i + 1:]
+    parts += [t for t in rest[:2] if t.startswith("-")]
+    return " ".join(parts)[:48]
 
 
 def blocks(msg):
@@ -157,7 +174,11 @@ def main() -> None:
             if texts:
                 last_text = texts  # 매번 갱신 → 최종 assistant 텍스트만 남는다
 
-    final = " ".join(last_text)
+    # 최종 답변은 stdin 의 last_assistant_message 가 정본이다. transcript 는 비동기로 쓰여
+    # 이번 턴 마지막 메시지가 아직 없을 수 있다 — 실패를 보고한 답변을 막는 오탐.
+    # https://code.claude.com/docs/en/hooks#common-input-fields
+    lam = data.get("last_assistant_message")
+    final = lam if isinstance(lam, str) and lam.strip() else " ".join(last_text)
 
     # ── 게이트 ②: 앞서 실패했던 명령이 이번 턴에 성공했는데 정정이 없다.
     #    "막힌다/못 한다"는 판단이 뒤집힌 것이므로, 결과를 보고하고 끝내면 앞뒤가 달라진다.
@@ -177,15 +198,19 @@ def main() -> None:
         if hard:
             # 되돌릴 수 없는 명령 — 차단한다.
             print(json.dumps({"decision": "block", "reason": "🚫 " + body}, ensure_ascii=False))
-        else:
-            # 되돌릴 수 있는 것 — 알림만. 오탐이 게이트를 죽이므로 차단 비용을 지불하지 않는다.
-            print(json.dumps({"systemMessage": "⚠️ " + body}, ensure_ascii=False))
-        sys.exit(0)
+            sys.exit(0)
+        # 되돌릴 수 있는 것 — 차단하지 않고 모델에게 피드백만 준다. systemMessage 는 사용자에게만
+        # 보이므로 additionalContext 로 보낸다. 피드백 뒤에도 게이트 ①은 계속 검사한다.
+        soft_notice = "⚠️ " + body
+    else:
+        soft_notice = None
 
     # ── 게이트 ①: 이번 턴 실패를 언급하지 않았다.
-    if not failures:
-        sys.exit(0)
-    if MENTION.search(final):
+    if not failures or MENTION.search(final):
+        if soft_notice:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "Stop", "additionalContext": soft_notice,
+            }}, ensure_ascii=False))
         sys.exit(0)
 
     listed = "\n".join(f"  · {f}" for f in failures[:5])
@@ -198,6 +223,7 @@ def main() -> None:
             f"{listed}{more}\n\n"
             "우회에 성공했더라도 보고한다. **권한 거부는 특히 사용자가 알아야 할 신호다.**\n"
             "성공 / 실패 / 한계(못 한 것) 3칸을 채워 다시 답하라."
+            + (f"\n\n{soft_notice}" if soft_notice else "")
         ),
     }, ensure_ascii=False))
     sys.exit(0)

@@ -52,7 +52,7 @@ def uncommitted_count() -> int:
 
 
 # 브랜치명에 `phase` 리터럴이 든 경우만 phase 추정에 사용.
-# 예: phase/3, feat/40-phase-3-stock — 매치 / 반례: feat/3-inventory — 매치 안 함
+# 예: phase/3, feat/40-phase-3-billing — 매치 / 반례: feat/3-billing — 매치 안 함
 _BRANCH_PHASE_RE = re.compile(r"phase[/-](\d+)")
 
 
@@ -74,7 +74,7 @@ def current_phase(branch: str) -> str:
         )
         if not files:
             return "?"
-        # Phase plan (phase-3-inventory.md) 우선, Epic plan (phase-3-epic-01-...) 차순위.
+        # Phase plan (phase-3-billing.md) 우선, Epic plan (phase-3-epic-01-...) 차순위.
         for f in files:
             parts = f.stem.split("-")
             if len(parts) >= 2 and parts[0] == "phase" and parts[1].isdigit():

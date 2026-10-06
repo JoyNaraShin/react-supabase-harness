@@ -12,7 +12,7 @@
 #   ~/.claude/settings.json 의 SessionStart 에 등록:
 #     bash ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/plugin-drift-check.sh
 #
-# 2026-08-07 개정 — 구판은 버전만 비교해서, 처방이 실제로 왜 안 먹는지를 못 봤다.
+# 개정 — 구판은 버전만 비교해서, 처방이 실제로 왜 안 먹는지를 못 봤다.
 #   그날 실측: 설치본 v0.16.0 에 강제 장치 4개가 빠져 있었다(v0.17.0 추가분 3개 +
 #   v0.18.0 의 1개). 그런데 구판 메시지는 "드리프트 v0.16.0 != v0.17.0" 한 줄이었고
 #   세션이 읽고 지나갔다. 더 나쁜 건 처방이 두 번 무효였다는 것 —
@@ -31,7 +31,9 @@ import json, os, subprocess
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
-SRC = Path(os.environ.get("HARNESS_SRC") or HOME / "react-supabase-harness")  # 소스 저장소 위치
+# 소스 저장소 위치 — 하네스를 직접 개발하는 경우에만 설정한다. 없으면 소스 대조(미푸시·
+# 캐시 신선도·버전)는 건너뛰고 설치본 자체만 검사한다(저자 경로를 가정하지 않는다).
+SRC = Path(os.environ["HARNESS_SRC"]) if os.environ.get("HARNESS_SRC") else None
 KEY = "react-supabase-harness@react-supabase"
 
 def sh(args, cwd):
@@ -46,7 +48,7 @@ def installed_root():
     🔴 경로를 추측하지 않고 installed_plugins.json 의 installPath 를 읽는다.
        첫 판은 cache/<marketplace>/<plugin>/ 을 설치본으로 봤는데, 실제 배치는
        cache/<marketplace>/<plugin>/<version>/ 이라 한 층 더 깊다. 그래서 hooks/ 를
-       못 찾고 "강제 장치 0개 가동"이라는 **오진**을 냈다(2026-08-07 실측 — 실제로는
+       못 찾고 "강제 장치 0개 가동"이라는 **오진**을 냈다(실측 — 실제로는
        6개가 돌고 있었고 빠진 건 v0.17.0 추가분 3개였다).
        레지스트리가 답을 갖고 있는데 경로 규칙을 추측한 것이 원인이다.
     """
@@ -60,15 +62,28 @@ problems = []   # (심각도, 사실, 처방)
 
 inst = installed_root()
 src_ver = None
+if SRC:
+    try:
+        src_ver = json.loads((SRC / ".claude-plugin/plugin.json").read_text())["version"]
+    except Exception:
+        pass
+hooks_down = False  # 강제 장치가 실제로 안 붙어 있는가 — 아래 경고 문단은 이때만 낸다
+
+# ── 0. 플러그인이 비활성화돼 있으면 훅은 0개 돈다(설치본이 멀쩡해도)
 try:
-    src_ver = json.loads((SRC / ".claude-plugin/plugin.json").read_text())["version"]
+    st = json.loads((HOME / ".claude/settings.json").read_text())
+    if (st.get("enabledPlugins") or {}).get(KEY) is False:
+        hooks_down = True
+        problems.append(("CRIT", "플러그인이 비활성화돼 있다 — 훅이 하나도 돌지 않는다",
+                         f"/plugin 에서 {KEY} 활성화"))
 except Exception:
     pass
 
 # ── 1. 강제 장치가 실제로 가동 중인가 (가장 중요 — 구판이 놓친 것)
 expected = []
 try:
-    hj = json.loads((SRC / "hooks/hooks.json").read_text())
+    # 기대 목록 = 소스(있으면) 또는 설치본 자신의 hooks.json
+    hj = json.loads(((SRC or inst) / "hooks/hooks.json").read_text())
     for ev in hj.get("hooks", {}).values():
         for grp in ev:
             for h in grp.get("hooks", []):
@@ -79,32 +94,35 @@ except Exception:
     pass
 
 if inst is None:
-    problems.append(("CRIT", "설치본을 찾을 수 없다", "/plugin install react-supabase-harness"))
+    hooks_down = True
+    problems.append(("CRIT", "설치본을 찾을 수 없다", f"/plugin install {KEY}"))
 elif not (inst / "hooks").is_dir():
+    hooks_down = True
     problems.append(("CRIT",
         f"설치본({inst.name})에 hooks/ 가 없다 — 강제 장치 {len(expected)}개가 0개 가동",
         "아래 marketplace update → plugin update 순서"))
 else:
     missing = [h for h in expected if not (inst / "hooks" / h).is_file()]
     if missing:
+        hooks_down = True
         problems.append(("CRIT",
             f"설치본에 훅 {len(missing)}/{len(expected)}개 없음: {', '.join(missing)}",
             "아래 marketplace update → plugin update 순서"))
 
 # ── 2. 미푸시 — 이게 있으면 update 처방 자체가 무효다
-unpushed = sh(["git", "log", "--oneline", "@{u}.."], SRC)
+unpushed = sh(["git", "log", "--oneline", "@{u}.."], SRC) if SRC else ""
 if unpushed:
     n = len(unpushed.splitlines())
     problems.append(("CRIT",
         f"소스에 미푸시 커밋 {n}개 — 플러그인은 GitHub 에서 설치되므로 update 해도 안 올라온다",
         f"cd {SRC} && git push   (그 다음에야 update 가 의미 있다)"))
 
-# ── 3. 마켓플레이스 캐시 신선도 — 오늘(2026-08-07) update 가 "not found" 로 죽은 원인.
+# ── 3. 마켓플레이스 캐시 신선도 — update 가 "not found" 로 죽은 실측 원인.
 #     캐시가 푸시보다 오래되면 새 버전의 존재 자체를 모른다. update 전에 갱신이 필요하다.
 try:
     km = json.loads((HOME / ".claude/plugins/known_marketplaces.json").read_text())
     last = km["react-supabase"]["lastUpdated"][:10]
-    head_date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], SRC)
+    head_date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], SRC) if SRC else ""
     if head_date and last < head_date:
         problems.append(("CRIT",
             f"마켓플레이스 캐시가 낡음 (갱신 {last} < 소스 최신 커밋 {head_date})",
@@ -124,18 +142,19 @@ except Exception:
 
 if problems:
     crit = [p for p in problems if p[0] == "CRIT"]
-    head = "🔴 하네스 강제 장치가 돌고 있지 않다" if crit else "⚠️ 하네스 드리프트"
+    head = ("🔴 하네스 강제 장치가 돌고 있지 않다" if hooks_down
+            else "⚠️ 하네스 설치본이 소스보다 뒤처졌다" if crit else "⚠️ 하네스 드리프트")
     out = [head, ""]
     for _, fact, fix in problems:
         out.append(f"  · {fact}")
         out.append(f"      → {fix}")
-    if crit:
+    if hooks_down:
         out += [
             "",
             "  지금 이 세션에는 block-impl-delegation(구현 위임 차단) · workflow-entry-guard",
             "  (플랜 없이 코드 시작 감지) · harness-boarding-guard(미탑승 적출) · stack-compliance",
             "  -guard 가 **하나도 붙어 있지 않다**. 규정은 컨텍스트에 상주하지 않으므로,",
-            "  이 상태에서는 하네스 규약을 세션이 기억해야만 지켜진다 — 그건 3회 실패한 방식이다.",
+            "  이 상태에서는 하네스 규약을 세션이 기억해야만 지켜진다 — 규칙 텍스트만으로는 반복해서 실패했다.",
             "",
             "  구현에 착수하기 전에 사용자에게 이 사실을 먼저 보고하라. 조용히 진행하지 말 것.",
         ]

@@ -5,13 +5,12 @@
     §2 「여러 관심사 섞이면 **경계 쪼개기 제안**(한 커밋 = 한 관심사)」 · 「40+ 파일이면 경계 재검토 제안」
     §7 금지 「여러 관심사 한 커밋」
 
-왜 규칙이 아니라 훅인가 (2026-08-27 실측):
+왜 규칙이 아니라 훅인가 (실측):
     규칙은 **이미 있었다.** 그런데 `commit` 스킬 안에만 있었고, 그 스킬은
     `disable-model-invocation: true` 라 **사용자가 `/commit` 을 칠 때만** 발동한다.
     즉 경계 검사가 커밋 시점에만 돈다 — 작업 중에는 아무도 안 본다.
-    한 프로젝트에서 두 덩어리(지면 재설계 + 전수 검사 보정)가 중간 커밋 없이 같은 파일에
-    겹쳐 41개가 쌓였고, 사용자가 *"이러면 내가 리뷰를 어떻게 하라는거야"* 로 지적하기 전까지
-    세션은 한 번도 경계를 제안하지 않았다. 세션의 자가 검출률은 0이었다.
+    두 관심사가 중간 커밋 없이 같은 파일에 겹쳐 수십 개가 쌓였고, 리뷰가 불가능하다는
+    지적을 받기 전까지 세션은 한 번도 경계를 제안하지 않았다. 세션의 자가 검출률은 0이었다.
     (같은 기제 = `report-failures-gate.py` — 규칙 텍스트로 막힐 결함이 아니다.)
 
 판정 (결정론적 — LLM 판정 없음. gate-engine.py 설계 원칙 ①):
@@ -29,7 +28,9 @@
 탈출구 (끄는 것은 사용자 결정):
     `<repo>/.claude/state/commit-boundary-gate-off`
 """
+from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -50,7 +51,11 @@ PROPOSED = re.compile(
 
 
 def out(msg: str) -> None:
-    print(json.dumps({"systemMessage": msg}, ensure_ascii=False))
+    # 모델이 읽어야 하는 지시다. systemMessage 는 사용자에게만 보이므로 additionalContext 로
+    # 보낸다 — https://code.claude.com/docs/en/hooks#stop-decision-control
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "Stop", "additionalContext": msg,
+    }}, ensure_ascii=False))
 
 
 def git(repo: Path, *args: str) -> str | None:
@@ -64,8 +69,14 @@ def git(repo: Path, *args: str) -> str | None:
     return r.stdout if r.returncode == 0 else None
 
 
-def final_text(path: str | None) -> str:
-    """최종 assistant 텍스트. 못 읽으면 빈 문자열(= 제안 안 한 것으로 본다)."""
+def final_text(data: dict) -> str:
+    """최종 assistant 텍스트. stdin 의 last_assistant_message 가 정본이고, transcript 는
+    비동기로 쓰여 이번 턴 답변이 아직 없을 수 있어 폴백으로만 쓴다.
+    못 읽으면 빈 문자열(= 제안 안 한 것으로 본다)."""
+    lam = data.get("last_assistant_message")
+    if isinstance(lam, str) and lam.strip():
+        return lam
+    path = data.get("transcript_path")
     if not path:
         return ""
     try:
@@ -128,7 +139,10 @@ def main() -> None:
     entries = [l for l in porcelain.splitlines() if l.strip()]
     n = len(entries)
 
-    state_file = repo / ".claude" / "state" / "commit-boundary.json"
+    # 상태는 대상 저장소 밖에 둔다 — 저장소 안에 쓰면 그 파일 자체가 미커밋 변경으로 잡히고,
+    # 하네스와 무관한 저장소에도 흔적을 남긴다.
+    key = hashlib.sha1(str(repo).encode()).hexdigest()[:16]
+    state_file = Path.home() / ".claude" / "state" / "commit-boundary" / f"{key}.json"
     try:
         state = json.loads(state_file.read_text())
     except Exception:
@@ -153,12 +167,16 @@ def main() -> None:
             remember(0)
         sys.exit(0)
 
-    # 같은 띠에서는 이미 울었다.
-    if band <= notified:
+    # 같은 띠에서는 이미 울었다. 띠가 내려갔으면(일부 커밋) 기록도 내려서,
+    # 다시 그 위로 쌓일 때 다시 울게 한다.
+    if band < notified:
+        remember(band)
+        sys.exit(0)
+    if band == notified:
         sys.exit(0)
 
     # 이미 경계를 제안했으면 조용히 넘어가되, 이 띠는 처리된 것으로 기록한다.
-    if PROPOSED.search(final_text(data.get("transcript_path"))):
+    if PROPOSED.search(final_text(data)):
         remember(band)
         sys.exit(0)
 
@@ -178,7 +196,7 @@ def main() -> None:
         "쌓인 뒤에는 같은 파일 안에 두 관심사가 섞여 되돌리기 어렵다.\n\n"
         "**다음 답변에서 관심사별 커밋 단위를 제안하라** — 단위마다 정확한 파일 목록과 "
         "제목 초안. 커밋은 사용자 승인을 거쳐 `/commit` 스킬로 한다.\n"
-        "이 저장소에서 끄려면(사용자 결정) `touch .claude/state/commit-boundary-gate-off`."
+        "이 알림을 끄는 것은 사용자 결정이다(`.claude/state/commit-boundary-gate-off`)."
     )
     sys.exit(0)
 

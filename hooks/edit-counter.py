@@ -61,7 +61,7 @@ def main() -> None:
             "사용자에게 `/check`·`/verify` 실행을 안내하라. "
             "(`/check`·`/verify` 는 disable-model-invocation 이라 모델이 직접 못 켠다.) "
             "② 설계 검증: 기계 검증은 '컴파일되는가'만 본다 — 모듈 경계·계층 분리·타입 배치는 "
-            "잡지 못한다(2026-07-20 실측: typecheck·test 전부 통과했으나 표시 문구가 엔진 코어에 "
+            "잡지 못한다(실측: typecheck·test 전부 통과했으나 표시 문구가 도메인 로직에 "
             "혼재하고 타입이 산재해 사용자가 육안 적발). 슬라이스가 구조를 건드렸으면 "
             "변경 성격 매칭 렌즈 1개를 **적대 리뷰로 위임**하라 — 구조·경계·의존 방향은 "
             "`structure-fitness-reviewer`, 보안·RLS·DB 는 `stability-reviewer`, "
