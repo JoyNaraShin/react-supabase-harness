@@ -1,0 +1,42 @@
+name: eval
+
+# 모델 비용이 드는 행동 eval — 수동 실행만. 단위 테스트(test.yml)는 PR 마다 돈다.
+# 필요: 저장소 시크릿 ANTHROPIC_API_KEY.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "모델 (haiku | sonnet | opus)"
+        default: "haiku"
+      runs:
+        description: "케이스당 런 수"
+        default: "1"
+      max_cost:
+        description: "비용 상한 USD"
+        default: "5"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: run eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          RUNS: ${{ inputs.runs }}
+          MAX_COST: ${{ inputs.max_cost }}
+        run: scripts/eval.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results-${{ inputs.model }}
+          path: evals/results/

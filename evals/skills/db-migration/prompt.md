@@ -1,0 +1,1 @@
+/react-supabase-harness:db-migration create a posts table (id uuid pk, author_id uuid references auth.users, title text not null, body text, created_at timestamptz default now()); authors can CRUD their own posts, everyone signed in can read

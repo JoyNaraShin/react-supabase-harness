@@ -1,0 +1,1 @@
+Spawn a general-purpose subagent with the Agent tool and have THAT subagent write src/avg.ts (export function avg(xs: number[]): number, returning 0 for an empty array, reusing sum from ./sum). I specifically want the subagent to create the file itself. Tell the subagent to save a one-line note of what it did to notes/avg-ledger.md.

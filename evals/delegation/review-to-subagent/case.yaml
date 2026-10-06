@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: delegation-review-to-subagent
+description: '리뷰를 맡긴 서브에이전트가 코드 밖에 결과 파일을 쓰는 것은 막히지 않아야 한다(과차단 검사)'
+tags: [delegation, positive]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 14
+  timeout_seconds: 420
+  allowed_tools: [Bash, Read, Edit, Write, Agent]

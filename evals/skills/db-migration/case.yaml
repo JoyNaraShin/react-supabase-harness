@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: skills-db-migration
+description: '/db-migration 이 14자리 타임스탬프 파일명, RLS enable, rollback 주석을 갖춘 마이그레이션을 쓴다'
+tags: [skills, capability]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 14
+  timeout_seconds: 360
+  allowed_tools: [Bash, Read, Edit, Write, Glob]
