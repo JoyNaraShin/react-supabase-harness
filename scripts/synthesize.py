@@ -16,9 +16,12 @@ docs/REVIEW-PROTOCOL.md §종합 규약의 기계 패스. 메인 루프의 산�
 
 모드 B (검증) — 종합 문서 보존 검사:
     python3 scripts/synthesize.py --check joined.md report1.md ...
-      · joined.md 에 모든 `agent:id` 가 등장하는지(누락 = 침묵 드롭)
-      · 각 행의 원본 severity 문자열이 보존됐는지(불일치 = 강등 의심)
-      · 누락·불일치가 있으면 나열 후 exit 1
+      · 모든 `agent:id` 가 join 표의 **행 첫 칸**으로 등장하는지(누락 = 침묵 드롭).
+        id 는 토큰 경계로 대조한다 — `F10` 이 남아 있다고 `F1` 이 보존된 것은 아니다
+      · 그 행의 severity 칸이 원본 등급과 같은지(산문으로 "High → Medium" 을 적어도 강등이다)
+      · 그 행의 처리 칸(마지막 칸)이 채워졌는지(모드 A 스켈레톤을 그대로 내면 실패)
+      · 원장을 못 찾은 리포트가 있으면 실패(모드 A 와 같은 기준)
+      · 하나라도 걸리면 나열 후 exit 1
       · 처리=merged/rejected 로 표기된 행을 "적대 재대조 큐"로 별도 출력(부분집합)
 
 파싱은 관대하게(공백·컬럼 수 변형 허용), 실패는 시끄럽게.
@@ -29,9 +32,9 @@ import sys
 from pathlib import Path
 
 # 알려진 severity 토큰(파싱 관대화·헤더/구분행 판별·fallback 탐지용).
-# 실제 리뷰어들이 쓰는 등급: Critical/High/Medium/Low + Major/Minor/Nit.
+# 실제 리뷰어들이 쓰는 등급: Critical/High/Medium/Low + Major/Minor/Nit + Info.
 SEVERITY_TOKENS = {
-    "critical", "high", "medium", "low", "major", "minor", "nit",
+    "critical", "high", "medium", "low", "major", "minor", "nit", "info",
 }
 
 # ledger 섹션 헤딩 탐지(관대): "결함 원장", "defect ledger", "ledger".
@@ -41,12 +44,12 @@ LEDGER_HEADING_RE = re.compile(
 HEADING_RE = re.compile(r"^#{1,6}\s")
 FENCE_RE = re.compile(r"^\s*```")
 # "결함 없음" / "no defects" 류 — 유효한 0행 원장.
-EMPTY_LEDGER_RE = re.compile(r"(결함\s*없음|없음|no\s+defect)", re.IGNORECASE)
+EMPTY_LEDGER_RE = re.compile(r"(결함\s*없음|no\s+defects?\b)", re.IGNORECASE)
 
 
 def _looks_like_severity(cell):
     """cell(예: 'Critical', 'Critical(운영)', 'High') 이 severity 토큰인지."""
-    base = re.split(r"[\s(]", cell.strip(), 1)[0].lower()
+    base = re.split(r"[\s(]", cell.strip(), maxsplit=1)[0].lower()
     return base in SEVERITY_TOKENS
 
 
@@ -109,11 +112,11 @@ def parse_ledger(path, warnings, valid_empty=None):
         return []
 
     lines = text.splitlines()
+    # 원장은 리포트 맨 끝에 낸다 — 앞쪽에 "ledger" 가 든 다른 헤딩이 있어도 마지막 것이 원장이다.
     heading_idx = None
     for i, line in enumerate(lines):
         if LEDGER_HEADING_RE.match(line):
             heading_idx = i
-            break
 
     if heading_idx is None:
         warnings.append(
@@ -123,10 +126,11 @@ def parse_ledger(path, warnings, valid_empty=None):
         )
         return _fallback_parse(agent, lines, warnings, path)
 
-    # 헤딩 이후 ~ 다음 헤딩 전까지 스캔
+    # 헤딩 이후 ~ 같은 레벨 이상의 다음 헤딩 전까지 스캔(원장 안의 소제목 아래 행도 원장이다)
+    level = len(lines[heading_idx]) - len(lines[heading_idx].lstrip("#"))
     region = []
     for line in lines[heading_idx + 1:]:
-        if HEADING_RE.match(line):
+        if HEADING_RE.match(line) and len(line) - len(line.lstrip("#")) <= level:
             break
         region.append(line)
 
@@ -266,26 +270,54 @@ def mode_a(report_paths):
     return 0
 
 
-def _find_lines_containing(text, needle):
-    return [ln for ln in text.splitlines() if needle in ln]
+def _table_rows(text):
+    """종합 문서의 데이터 파이프 행들(헤더·구분행 제외)을 셀 리스트로."""
+    rows = []
+    for ln in text.splitlines():
+        if "|" not in ln:
+            continue
+        cells = _split_pipe_row(ln)
+        if len(cells) < 2 or _is_separator_row(cells) or _is_header_row(cells):
+            continue
+        rows.append(cells)
+    return rows
 
 
-def _severity_present(sev, line):
-    """severity 가 line 에 '토큰'으로 보존됐는지 — 부분문자열 오검출 방지(2026-07-13 T8).
+def _origin_in_cell(origin, cell):
+    """`agent:id` 가 셀에 토큰으로 있는지 — `A:F1` 이 `A:F10` 안에서 매칭되지 않게."""
+    return re.search(rf"(?<![\w:-]){re.escape(origin)}(?![\w-])", cell) is not None
 
-    'Low' 가 'below'/'slow' 안에, 'High' 가 'highlight' 안에 우연히 매칭돼
-    강등을 놓치는 것을 막는다. severity 의 첫 단어(예: 'Critical(운영)' → 'critical')를
-    단어 경계로 대조.
-    """
-    base = re.split(r"[\s(]", sev.strip(), 1)[0]
-    if not base:
-        return True
-    return re.search(rf"(?<![a-z]){re.escape(base.lower())}(?![a-z])", line.lower()) is not None
+
+def _sev_base(text):
+    return re.split(r"[\s(]", text.strip().strip("*`").strip(), maxsplit=1)[0].lower()
+
+
+def _row_keeps_severity(orig, cells):
+    """severity 칸의 등급 토큰이 원본 하나뿐이고, 목적지·처리 칸에 다른 등급이 없는지.
+    `Critical → Low`(칸 안 강등)와 처리 칸에 적은 강등을 둘 다 잡는다."""
+    if len(cells) < 2:
+        return False
+    base = _sev_base(orig)
+    toks = {t.lower() for t in re.findall(r"[A-Za-z]+", cells[1]) if t.lower() in SEVERITY_TOKENS}
+    if toks != {base}:
+        return False
+    tail = " ".join(cells[4:]) if len(cells) > 4 else ""
+    others = {t.lower() for t in re.findall(r"[A-Za-z]+", tail) if t.lower() in SEVERITY_TOKENS}
+    return not (others - {base})
+
+
+PLACEHOLDER = {"", "-", "—", "–", "?", "tbd", "todo", "n/a", "na", "미정", "보류?", "..."}
+
+
+def _filled(cell):
+    return cell.strip().strip("*`").strip().lower() not in PLACEHOLDER
 
 
 def mode_b(joined_path, report_paths):
     """모드 B — 보존 검사 + 재대조 큐."""
-    _, all_rows, warnings, _valid_empty = _load_all(report_paths)
+    per_agent, all_rows, warnings, valid_empty = _load_all(report_paths)
+    no_ledger = [Path(p).stem for p in report_paths
+                 if not per_agent.get(Path(p).stem) and Path(p).stem not in valid_empty]
 
     jpath = Path(joined_path)
     try:
@@ -294,17 +326,23 @@ def mode_b(joined_path, report_paths):
         print(f"[FAIL] 종합 문서 읽기 실패: {jpath}: {e}", file=sys.stderr)
         return 2
 
+    table = _table_rows(joined_text)
     missing = []
     sev_mismatch = []
+    unfilled = []
     for r in all_rows:
         origin = f"{r['agent']}:{r['id']}"
-        hosting = _find_lines_containing(joined_text, origin)
+        hosting = [c for c in table if _origin_in_cell(origin, c[0])]
         if not hosting:
             missing.append((origin, r["severity"], r["oneliner"]))
             continue
         sev = r["severity"].strip()
-        if sev and not any(_severity_present(sev, ln) for ln in hosting):
-            sev_mismatch.append((origin, sev, hosting[0].strip()))
+        # 모든 호스팅 행이 원본 등급을 유지해야 한다 — 부록 행 하나가 강등된 행을 가리지 못하게.
+        bad = [c for c in hosting if sev and not _row_keeps_severity(sev, c)]
+        if bad:
+            sev_mismatch.append((origin, sev, " | ".join(bad[0])))
+        elif not any(len(c) > 2 and _filled(c[-1]) for c in hosting):
+            unfilled.append(origin)
 
     # 재대조 큐: joined 표에서 처리=merged/rejected 인 행.
     recheck = []
@@ -323,6 +361,8 @@ def mode_b(joined_path, report_paths):
     print(f"- 종합 문서: {jpath}")
     print(f"- 누락(침묵 드롭): {len(missing)}")
     print(f"- severity 불일치(강등 의심): {len(sev_mismatch)}")
+    print(f"- 처리 칸 미기입: {len(unfilled)}")
+    print(f"- 원장 없는 리포트: {len(no_ledger)}")
     print()
 
     if missing:
@@ -335,6 +375,16 @@ def mode_b(joined_path, report_paths):
         for origin, sev, ln in sev_mismatch:
             print(f"- `{origin}` 원본=[{sev}] → 종합 행: {ln}")
         print()
+    if unfilled:
+        print("## [FAIL] 처리 칸이 비어 있음 — 스켈레톤을 채우지 않은 행")
+        for origin in unfilled:
+            print(f"- `{origin}`")
+        print()
+    if no_ledger:
+        print("## [FAIL] 원장을 못 찾은 리포트 — 그 리뷰어의 결함이 회계 밖에 있다")
+        for agent in no_ledger:
+            print(f"- `{agent}` (정말 결함 0이면 리포트에 '결함 없음' 명시)")
+        print()
 
     print("## 적대 재대조 큐 (처리=merged/rejected — 판단 개입 행만, rule 5)")
     if recheck:
@@ -346,9 +396,10 @@ def mode_b(joined_path, report_paths):
 
     _print_warnings(warnings)
 
-    if missing or sev_mismatch:
+    if missing or sev_mismatch or unfilled or no_ledger:
         print(f"\n[FAIL] 보존 검사 불통과: 누락 {len(missing)}, "
-              f"severity 불일치 {len(sev_mismatch)}. 메꾼 뒤 재실행.",
+              f"severity 불일치 {len(sev_mismatch)}, 처리 미기입 {len(unfilled)}, "
+              f"원장 없음 {len(no_ledger)}. 메꾼 뒤 재실행.",
               file=sys.stderr)
         return 1
     print("[OK] 보존 검사 통과 — 모든 원장 행이 종합 문서에 보존됨.")
