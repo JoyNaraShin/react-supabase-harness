@@ -7,7 +7,7 @@
 v0.32.0 「알려진 한계」의 우회들을 명령 표기를 더 조이는 대신 **결과**로 닫았다. 어떤 표기로 했든 결과는 같다.
 
 ### 안전망
-- `snapshot-guard`(PreToolUse·Bash) — 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리(미추적 포함·gitignore 제외)를 `refs/harness/snapshots/` 에 남긴다. 실제 인덱스를 임시 파일로 복사해 바뀐 파일만 해시하고, 같은 트리면 재사용, 최근 30개 보존. 파일 1,300개 레포에서 250–450ms. 파괴 계열 명령이면 파일 단위 복구 명령을 알린다. 저장소는 하위 명령마다 `cd` 를 따라 정하고, 프로젝트의 저장소(모노레포 상위 루트 포함)와 프로젝트 안 저장소에만 ref 를 쓴다(홈 디렉터리 dotfiles 저장소 등에는 쓰지 않는다 — 실세션 eval trace 에서 발견). Claude Code 체크포인트는 Bash 변경을 추적하지 않는다(공식 문서).
+- `snapshot-guard`(PreToolUse·Bash) — 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리(미추적 포함·gitignore 제외)를 `refs/harness/snapshots/` 에 남긴다. 실제 인덱스를 임시 파일로 복사해 바뀐 파일만 해시하고, 같은 트리면 재사용, 최근 30개 보존. 파일 1,300개 레포에서 250–450ms. 스냅샷 커밋은 고정 신원을 써서 git 사용자 설정이 없는 환경(CI·새 머신)에서도 남는다. 파괴 계열 명령이면 파일 단위 복구 명령을 알린다. 저장소는 하위 명령마다 `cd` 를 따라 정하고, 프로젝트의 저장소(모노레포 상위 루트 포함)와 프로젝트 안 저장소에만 ref 를 쓴다(홈 디렉터리 dotfiles 저장소 등에는 쓰지 않는다 — 실세션 eval trace 에서 발견). Claude Code 체크포인트는 Bash 변경을 추적하지 않는다(공식 문서).
 - `hooks/git/pre-push` + `scripts/install-git-hooks.sh` — 기본 브랜치의 non-fast-forward 갱신, 원격 ref 삭제, `refs/harness/*` 전송을 git 이 보낼 ref 갱신으로 판정해 막는다. 기능 브랜치의 rebase 후 갱신은 통과. 기존 pre-push 는 `pre-push.local` 로 보존해 먼저 실행. `block-destructive-git` 은 `push --no-verify`·`-c core.hooksPath=…` 를 막는다.
 
 ### 룰 술어

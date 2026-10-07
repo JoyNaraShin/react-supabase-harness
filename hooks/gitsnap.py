@@ -74,7 +74,12 @@ def snapshot(repo: str, message: str = "harness snapshot"):
     if prev and prev[1] == tree:
         return prev[0]
     head = _git(repo, "rev-parse", "-q", "--verify", "HEAD")
-    commit = _git(repo, "commit-tree", tree, "-m", message, *(["-p", head] if head else []))
+    # 스냅샷은 사용자 커밋이 아니다 — git 사용자 설정(user.name/email)이 없는 환경(CI·새 머신)에서도
+    # commit-tree 가 실패하지 않도록 고정 신원을 쓴다(실측: GitHub Actions 에서 스냅샷 전부 누락).
+    ident = {f"GIT_{r}_{k}": v for r in ("AUTHOR", "COMMITTER")
+             for k, v in (("NAME", "harness snapshot"), ("EMAIL", "harness-snapshot@localhost"))}
+    commit = _git(repo, "commit-tree", tree, "-m", message, *(["-p", head] if head else []),
+                  env=dict(os.environ, **ident))
     if not commit:
         return None
     _git(repo, "update-ref", f"{REF_PREFIX}{int(time.time() * 1000)}", commit)
