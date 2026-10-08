@@ -93,6 +93,8 @@ def _prune(repo: str) -> None:
         _git(repo, "update-ref", "-d", ref)
 
 
-def changed_paths(repo: str, tree_a: str, tree_b: str) -> list:
-    out = _git(repo, "diff-tree", "-r", "--name-only", "--no-renames", tree_a, tree_b)
+def changed_paths(repo: str, tree_a: str, tree_b: str, only: str = "") -> list:
+    """두 트리 사이에 바뀐 경로. only="D" 면 tree_a 에 있고 tree_b 에 없는(사라진) 경로만."""
+    args = ["diff-tree", "-r", "--name-only", "--no-renames"] + ([f"--diff-filter={only}"] if only else [])
+    out = _git(repo, *args, tree_a, tree_b)
     return [p for p in (out or "").splitlines() if p]

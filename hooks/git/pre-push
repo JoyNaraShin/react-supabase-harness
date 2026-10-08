@@ -24,11 +24,13 @@ printf '%s\n' "$input" | {
     case "$local_ref$remote_ref" in
       *refs/harness/*)
         echo "harness pre-push: refs/harness/* (로컬 스냅샷)는 원격으로 보내지 않는다 — $remote_ref" >&2
+        echo "  다음 행동: 브랜치만 push 한다(--mirror·refs/* 전송 대신 git push origin <브랜치>)." >&2
         status=1; continue ;;
     esac
     case "$local_sha" in
       0000000000000000000000000000000000000000*)
         echo "harness pre-push: 원격 ref 삭제 차단 — $remote_ref" >&2
+        echo "  다음 행동: 삭제가 필요하면 이유를 사용자에게 알리고 사람이 직접 실행한다." >&2
         status=1; continue ;;
     esac
     case "$remote_sha" in

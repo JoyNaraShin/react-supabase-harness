@@ -12,6 +12,8 @@
 //   globExists    "패턴" | [패턴…] | {pattern, except} 프로젝트에 해당 파일이 있는가(except = 제외할 파일명 패턴)
 //   harnessTarget true                             하네스 관할 프로젝트인가
 //   escapeHatch   "이름"                            탈출구가 켜졌는가
+//   commandRegex  "정규식"                          Bash 하위 명령 앞머리 매칭 (인자·heredoc 속 문자열 제외)
+//   verdict       {agent, in} | {criticalAbove, sameHead}  훅이 기록한 판정(.claude/state/verdicts.jsonl)
 //
 // on = 실행 전(PreToolUse)에 볼 도구, after = 실행 뒤(PostToolUse)에 결과로 다시 볼 도구.
 // when 은 AND 리스트. 각 항목에 "not": true 를 넣으면 부정.
@@ -56,6 +58,38 @@
       "action": "deny",
       "off": "ui-lib-gate-off",
       "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 기본 정책(외부 UI 컴포넌트 라이브러리를 쓰지 않는다).\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
+    },
+
+    {
+      "id": "fit-before-phase",
+      // WORKFLOW 「/phase 0 = 적합성 게이트」 — phase 0 산출물이 있는 프로젝트에서 phase 1 이후 plan 을 쓰려면
+      // structure-fitness-reviewer 의 FIT 기록이 있어야 한다. 기록은 subagent-audit 훅이 쓴다(대화 속 주장 아님).
+      "on": ["Write", "Edit"],
+      "when": [
+        { "not": true, "escapeHatch": "phase-gate-off" },
+        { "harnessTarget": true },
+        { "pathGlob": ["*/docs/plans/phase-[1-9]*.md", "docs/plans/phase-[1-9]*.md"] },
+        { "globExists": { "pattern": ["docs/plans/phase-0-domain.md"] } },
+        { "not": true, "verdict": { "agent": "structure-fitness-reviewer", "in": ["FIT"] } }
+      ],
+      "action": "deny",
+      "off": "phase-gate-off",
+      "message": "🚫 phase 0 적합성 판정 없이 다음 phase plan 작성 차단 ({match}) — WORKFLOW 「/phase 0 = 적합성 게이트」.\n훅이 기록한 structure-fitness-reviewer 의 마지막 판정이 FIT 이 아니다(없거나 GAP·REDESIGN).\n\n다음 행동 — 사용자에게 `/react-supabase-harness:review-structure docs/plans/phase-0-domain.md` 로 판정을 받자고 요청한다. GAP 을 알고도 진행하는 것은 사용자 결정이다."
+    },
+
+    {
+      "id": "no-pr-with-critical",
+      // WORKFLOW 「Critical 미해결이면 머지 금지」 — 지금 HEAD 위에 Critical 이 남은 리뷰 기록이 있으면 PR 생성·머지를 막는다.
+      // 고친 뒤 커밋하면 HEAD 가 바뀌어 그 기록은 판단 대상에서 빠진다(재리뷰 권장).
+      "on": ["Bash"],
+      "when": [
+        { "not": true, "escapeHatch": "review-gate-off" },
+        { "commandRegex": "gh\\s+pr\\s+(?:create|merge)\\b" },
+        { "verdict": { "criticalAbove": 0, "sameHead": true } }
+      ],
+      "action": "deny",
+      "off": "review-gate-off",
+      "message": "🚫 Critical 이 남은 리뷰 기록 위에서 PR 생성·머지 차단 ({match}) — WORKFLOW 「Critical 미해결이면 머지 금지」.\n\n다음 행동 — Critical 을 고쳐 커밋한 뒤 같은 렌즈로 다시 리뷰한다. 수용하고 진행하는 것은 사용자 결정이다."
     },
 
     {

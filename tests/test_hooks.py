@@ -254,7 +254,8 @@ class StripJsoncTest(unittest.TestCase):
 
     def test_shipped_rules_parse(self):
         rules = json.loads(self.strip((ROOT / "gates" / "rules.jsonc").read_text()))["rules"]
-        self.assertEqual({r["id"] for r in rules}, {"no-ui-library", "plan-first"})
+        self.assertEqual({r["id"] for r in rules},
+                         {"no-ui-library", "plan-first", "fit-before-phase", "no-pr-with-critical"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1324,6 +1325,72 @@ class SubagentAuditTest(_RepoCase):
         self.assertTrue(denied(self.gate("Write", {"file_path": vf, "content": "{}"})))
         self.assertTrue(denied(self.gate("Bash", {"command": "echo '{}' >> .claude/state/verdicts.jsonl"})))
         self.assertIsNone(self.gate("Bash", {"command": "cat .claude/state/verdicts.jsonl"}))
+
+
+class SnapshotPostNoticeTest(_RepoCase):
+    """명령 문자열로는 삭제가 안 보이는 경우(스크립트 안의 git clean)도 결과로 잡아 복구 경로를 준다."""
+
+    def snap(self, cmd, event="PreToolUse"):
+        return self.hook("snapshot-guard.py", {"tool_name": "Bash", "tool_input": {"command": cmd},
+                                               "hook_event_name": event})
+
+    def test_deleted_files_are_reported_after_the_command(self):
+        Path(self.proj, "src", "wip.ts").write_text("draft\n")
+        self.assertIsNone(self.snap("./reset.sh"))                  # LOSSY 아님 → 사전 알림 없음
+        Path(self.proj, "src", "wip.ts").unlink()
+        out = self.snap("./reset.sh", "PostToolUse")
+        self.assertIn("src/wip.ts", context(out))
+        self.assertIn("show", context(out))
+        self.assertIsNone(self.snap("./reset.sh", "PostToolUse"))   # 표식은 한 번만 쓰인다
+
+    def test_no_notice_without_deletion_or_for_another_command(self):
+        Path(self.proj, "src", "wip.ts").write_text("draft\n")
+        self.snap("./build.sh")
+        Path(self.proj, "src", "new.ts").write_text("added\n")     # 추가·수정은 알리지 않는다
+        self.assertIsNone(self.snap("./build.sh", "PostToolUse"))
+        self.snap("./a.sh")
+        Path(self.proj, "src", "wip.ts").unlink()
+        self.assertIsNone(self.snap("./b.sh", "PostToolUse"))        # 다른 명령의 표식으로 판단하지 않는다
+
+
+class VerdictGateTest(_RepoCase):
+    """훅이 쓴 판정 기록을 다음 단계가 읽는다 — phase 0 FIT 없이 phase 1 plan 금지, Critical 위 PR 금지."""
+
+    def record(self, agent, msg, aid):
+        self.hook("subagent-audit.py", {"hook_event_name": "SubagentStop", "agent_id": aid,
+                                        "agent_type": f"react-supabase-harness:{agent}", "session_id": "s1",
+                                        "last_assistant_message": msg, "stop_hook_active": False})
+
+    def plan(self):
+        return self.gate("Write", {"file_path": f"{self.proj}/docs/plans/phase-1-auth.md", "content": "# p1"})
+
+    def test_phase_plan_needs_a_fit_record_once_phase_0_exists(self):
+        self.assertIsNone(self.plan())                                # phase 0 산출물 없는 프로젝트는 판단 밖
+        Path(self.proj, "docs", "plans").mkdir()
+        Path(self.proj, "docs", "plans", "phase-0-domain.md").write_text("# p0\n")
+        out = self.plan()
+        self.assertTrue(denied(out))
+        self.assertIn("다음 행동", reason(out))
+        self.record("structure-fitness-reviewer", "Critical 0 / High 2\nVERDICT(GAP 2)", "s1")
+        self.assertTrue(denied(self.plan()))
+        self.record("structure-fitness-reviewer", "Critical 0 / High 0\nVERDICT(FIT)", "s2")
+        self.assertIsNone(self.plan())
+        self.assertIsNone(self.gate("Write", {"file_path": f"{self.proj}/docs/plans/phase-0-domain.md",
+                                              "content": "# p0 v2"}))
+
+    def test_pr_is_blocked_while_a_critical_sits_on_head(self):
+        pr = {"command": "gh pr create --fill"}
+        self.assertIsNone(self.gate("Bash", pr))
+        self.record("stability-reviewer", "Critical 1 / High 0\nVERDICT(GAP 1)", "r1")
+        out = self.gate("Bash", pr)
+        self.assertTrue(denied(out))
+        self.assertIn("다음 행동", reason(out))
+        self.assertTrue(denied(self.gate("Bash", {"command": "gh pr merge 3 --squash"})))
+        self.assertIsNone(self.gate("Bash", {"command": "gh pr view 3"}))
+        self.assertIsNone(self.gate("Bash", {"command": "echo 'gh pr create' > notes.txt"}))  # 문자열은 데이터
+        Path(self.proj, "src", "old.ts").write_text("fixed\n")
+        _git(self.proj, "commit", "-qam", "fix")                      # HEAD 가 바뀌면 그 기록은 판단 밖
+        self.assertIsNone(self.gate("Bash", pr))
 
 
 class CommitAskRuleNoticeTest(unittest.TestCase):

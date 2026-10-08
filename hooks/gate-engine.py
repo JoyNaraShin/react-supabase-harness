@@ -307,6 +307,69 @@ def p_harness_target(ctx, a):
     return (ok, "")
 
 
+def p_command_regex(ctx, a):
+    """Bash 하위 명령 정규식 — 하위 명령(`;`·`&&`·`|` 로 나뉜 것)마다 앞머리부터 맞춘다. 그래서
+    `echo 'gh pr create'` 처럼 다른 명령의 인자로 나온 문자열과 heredoc 본문은 걸리지 않는다.
+    앞의 환경변수 대입·launcher(sudo·env 등)는 건너뛴다."""
+    if ctx["tool"] != "Bash":
+        return (False, "")
+    rx = re.compile(a if isinstance(a, str) else a["pattern"])
+    for seg, _ in shellparse.segments(ctx["command"], str(ctx.get("cwd") or ".")):
+        toks = seg.split()
+        while toks and (re.match(r"[A-Za-z_]\w*=", toks[0]) or toks[0] in shellparse.LAUNCHERS):
+            toks.pop(0)
+        m = rx.match(" ".join(toks))
+        if m:
+            return (True, m.group(0)[:60])
+    return (False, "")
+
+
+def _verdicts(ctx) -> list:
+    """subagent-audit 훅이 쓴 판정 기록(.claude/state/verdicts.jsonl). 에이전트는 이 파일을 쓸 수 없다."""
+    if "verdicts" not in ctx:
+        recs = []
+        try:
+            for ln in (ctx["root"] / ".claude" / "state" / "verdicts.jsonl").read_text(encoding="utf-8").splitlines():
+                try:
+                    recs.append(json.loads(ln))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        ctx["verdicts"] = recs
+    return ctx["verdicts"]
+
+
+def p_verdict(ctx, a):
+    """판정 기록 술어.
+    {agent, in:[…]}               — 그 에이전트의 마지막 판정이 목록 안에 있는가 (예: FIT)
+    {criticalAbove:N, sameHead}   — 리뷰어별 마지막 기록 중 Critical 이 N 을 넘는 것이 있는가(sameHead: 지금 HEAD 위 기록만)"""
+    recs = _verdicts(ctx)
+    agents = a.get("agent")
+    agents = [agents] if isinstance(agents, str) else agents
+    latest = {}
+    for r in recs:
+        if not agents or r.get("agent_type") in agents:
+            latest[r.get("agent_type")] = r
+    if "in" in a:
+        hits = [r for r in latest.values() if r.get("verdict") in a["in"]]
+        return (bool(hits), hits[0]["verdict"] if hits else "")
+    if "criticalAbove" in a:
+        head = None
+        if a.get("sameHead"):
+            import subprocess
+            try:
+                head = subprocess.run(["git", "-C", str(ctx["root"]), "rev-parse", "-q", "--verify", "HEAD"],
+                                      capture_output=True, text=True, timeout=3).stdout.strip()
+            except Exception:
+                return (False, "")
+        for r in latest.values():
+            c = r.get("critical")
+            if isinstance(c, int) and c > a["criticalAbove"] and (head is None or r.get("head") == head):
+                return (True, f"{r.get('agent_type')} Critical {c}")
+    return (False, "")
+
+
 def p_escape_hatch(ctx, a):
     """탈출구가 켜져 있는가. 파일 또는 환경변수."""
     if (ctx["root"] / ".claude" / "state" / a).is_file():  # 디렉터리는 탈출구가 아니다
@@ -324,6 +387,8 @@ PREDICATES = {
     "globExists": p_glob_exists,
     "harnessTarget": p_harness_target,
     "escapeHatch": p_escape_hatch,
+    "commandRegex": p_command_regex,
+    "verdict": p_verdict,
 }
 
 
