@@ -37,6 +37,7 @@ tools: Read, Grep, Glob, Bash, SendMessage
 ### 판정 예시 (보정용 — 이 수준과 형식을 기준으로)
 - **좋은 지적** — `[Critical] S1 profiles UPDATE 정책 \`with check (true)\`` · 위치 `migrations/…_profiles.sql:9` · 근거: member 세션으로 `update profiles set role='admin' where id=auth.uid()` 가 성공(실측 또는 정책 대수로 증명) · 수정: `with check (auth.uid() = id and role = (select role from profiles where id = auth.uid()))` 또는 role 컬럼 UPDATE grant 회수.
 - **나쁜 지적** — "RLS 가 충분히 엄격한지 검토 필요", "SQL 인젝션 가능성". 위치·재현·영향이 없으면 결함이 아니라 불안이다 — 쓰지 않는다.
+- **정책 부재 = 기본 거부** — RLS 가 켜진 표에 INSERT·DELETE 정책이 없는 것은 그 경로를 막은 것이다. 가입 트리거(`security definer`)가 행을 만드는 INFRA 인증 규약이면 클라이언트 INSERT 정책 부재가 의도다 — "정책 추가"(`with check (false)` 포함)를 권하지 않는다. 결함이 되려면 그 부재로 **실제로 실패하는 사용자 흐름**(트리거도 없는데 화면이 insert 한다 등)을 재현으로 보여야 한다.
 - **결함 없음 판정** — 정책·grant·EXECUTE 권한을 다 읽었고 재현 경로가 없으면 `결함 없음` 한 줄과 확인한 범위만 적는다. 원장을 채우려고 Minor 를 만들지 않는다.
 
 ## 내 담당 / 양보

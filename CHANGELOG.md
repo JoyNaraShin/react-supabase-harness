@@ -2,6 +2,34 @@
 
 이전 버전의 변경 내역은 git 이력에 있다. 이 파일은 공개 이후부터 기록한다.
 
+## 0.34.0 — 판정 기록의 소비와 측정 확장
+
+v0.33.0 자기 채점(C1–C9)의 빈칸을 메웠다: 기록만 하던 판정을 다음 단계가 읽고, eval 을 20케이스 이상·pass^k 로 넓히고, 구성요소 단위 ablation 도구를 만들었다.
+
+### 판정 기록 → 다음 단계 게이트
+- 새 술어 `verdict` — `subagent-audit` 이 쓴 `.claude/state/verdicts.jsonl` 을 읽는다. `{agent, in}`(그 에이전트의 마지막 판정), `{criticalAbove, sameHead}`(지금 HEAD 위 리뷰 기록의 Critical).
+- 새 술어 `commandRegex` — Bash 하위 명령마다 앞머리부터 맞춘다(환경변수 대입·launcher 는 건너뜀). 다른 명령의 인자 속 문자열·heredoc 본문은 걸리지 않는다.
+- 새 룰 `fit-before-phase` — `docs/plans/phase-0-domain.md` 가 있는 프로젝트에서 structure-fitness-reviewer 의 마지막 판정이 FIT 이 아니면 phase 1 이후 plan 쓰기를 막는다(탈출구 `phase-gate-off`).
+- 새 룰 `no-pr-with-critical` — 지금 HEAD 위 리뷰 기록에 Critical 이 남아 있으면 `gh pr create/merge` 를 막는다(탈출구 `review-gate-off`). 고쳐서 커밋하면 HEAD 가 바뀌어 판단에서 빠진다.
+
+### 안전망
+- `snapshot-guard` PostToolUse — 명령이 끝나면 실행 직전 스냅샷 대비 **사라진 파일**을 결과로 찾아 복구 명령과 함께 알린다. 스크립트 안의 `git clean` 처럼 명령 문자열에 드러나지 않는 삭제도 잡는다. 같은 명령의 표식만 쓰고(15분 이내), 추가·수정은 알리지 않는다.
+- `pre-push` 차단 메시지(원격 ref 삭제·`refs/harness/*`)에 "다음 행동" 줄.
+
+### 측정
+- eval 12 → 21케이스 — 스냅샷 복구(스크립트 속 삭제), 금지 의존성 결과 검사(스크립트가 쓴 `package.json`), 셸 heredoc plan-first, verify FAIL 위 승인 커밋, 스킬 4종(`/commit`·`/feature-scaffold`·`/auth-scaffold`·`/db-migration` backfill), 결함 없는 RLS 에 대한 리뷰어 과잉 지적.
+- `scripts/eval-report.py` — 결과 JSON 들을 모델·케이스별 Δ·pass^k 로 집계. 사용량 한도로 끊긴 런은 점수에서 뺀다. `--min-pass-k` 미만이면 exit 1.
+- `scripts/ablate.py` — 훅 하나를 hooks.json 에서 뺀 사본으로 그 훅이 지키는 케이스를 다시 돌려 기여도를 잰다(`claude plugin eval` 은 플러그인 전체 on/off 만 지원).
+- `.github/workflows/eval.yml` — 구독 사용량 전용(`CLAUDE_CODE_OAUTH_TOKEN`, API 키는 넘기지 않음·토큰 없으면 즉시 실패), pass^k 비율 하한으로 잡 성패를 정한다.
+- `doctor` — 100줄 넘는 스킬 파일의 목차를 실제 목록 형태로 검사(제목만 있는 것 불인정), README·AGENTS 의 훅·에이전트·스킬·술어·eval 케이스 수 표기를 실제 수와 대조.
+- 계약 테스트 143 → 147, 뮤턴트 32 → 37.
+
+### eval 이 찾아 고친 것
+- `/db-migration` 이 INFRA §Backfill 규약(일회용 UPDATE 대신 `private.backfill_*()` 함수)을 몰랐다 — 기존 행이 있는 표에 NOT NULL 열을 더하는 케이스에서 플러그인 arm 도 일회용 UPDATE 를 썼다. 스킬 2단계에 규약을 넣었다.
+- `stability-reviewer` 가 하네스 자신의 인증 규약(가입 트리거가 profile 을 만들고 클라이언트 INSERT 정책은 두지 않음)을 Major 결함으로 불렀다 — "정책 부재 = 기본 거부" 보정 예시를 넣었다.
+- `harness-boarding-guard` 의 미탑승 안내가 읽기 전용 요청(리뷰)까지 멈춰 세워 되묻게 했다 — 파일을 쓰지 않는 요청은 수행하고 끝에 한 줄로 알리게 했다.
+- `snapshot-guard` 사후 알림을 "의도하지 않았으면 되살려라"에서 "의도했더라도 사라진 목록과 복구 명령을 알려라"로 — 사용자가 리셋을 요청한 경우 모델이 삭제를 의도로 보고 침묵했다.
+
 ## 0.33.0 — 결과 기반 센서
 
 v0.32.0 「알려진 한계」의 우회들을 명령 표기를 더 조이는 대신 **결과**로 닫았다. 어떤 표기로 했든 결과는 같다.

@@ -8,6 +8,13 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
 
 `${CLAUDE_PLUGIN_ROOT}/docs/INFRA.md`(Migration Safety) 규약에 맞춰 마이그레이션을 생성한다.
 
+## 목차
+
+- 1. 준비 — 입력 검증·중복 체크·파일 생성
+- 2. 내용 작성
+- 3. 검증·후속
+- 참고
+
 ## 1. 준비 — 입력 검증·중복 체크·파일 생성
 1. **입력 검증**: `$ARGUMENTS` 가 snake_case 인지 확인(kebab·space·대문자 시 에러).
 2. **중복 체크**: `supabase/migrations/*_<slug>.sql` 이 이미 있으면 경고 후 종료.
@@ -58,6 +65,10 @@ argument-hint: "<slug> (snake_case, 예: add_posts_table)"
      막았다고 **쓰기 전에** 그 롤로 직접 찔러 `42501` 을 눈으로 본다. 그리고 회귀락을 건다:
      `not has_table_privilege('authenticated', 'public.<name>', 'DELETE')` 또는 "DELETE GRANT 유지 N표"
      전수 카운트 단언. 없으면 **다음 표에서 그대로 되살아난다.**
+   - **기존 행을 채워야 하면(NOT NULL 열 추가·파생값) 일회용 `UPDATE` 로 쓰지 않는다** — INFRA.md
+     §Backfill. `private.backfill_<무엇>()` 함수로 두고 채운 행 수를 반환하게 한 뒤 마이그레이션이 한 번
+     호출한다: 열 추가(nullable) → `select private.backfill_<무엇>();` → `set not null`. pgTAP 이 픽스처로
+     **같은 함수**를 돌려 검증한다(dev 에 대상 행이 0개면 실행 결과로는 아무것도 검증되지 않는다).
    - **UPDATE 정책은 `USING`(OLD)과 `WITH CHECK`(NEW)을 나란히 쓴다.** WITH CHECK 이 더
      약하면 사용자가 행의 **부모를 바꿔 옮길 수 있다**(재부모화). 그리고 두 식 어느 쪽도
      *어떤 컬럼이 바뀌었는지*는 보지 않는다 — 컬럼 범위를 좁히려면 트리거가 필요하다.

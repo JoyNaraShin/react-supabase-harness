@@ -12,7 +12,7 @@
       "name": "react-supabase-harness",
       "source": "./",
       "description": "Claude Code 개발 워크플로 하네스 — 플랜 우선 코딩, 적대 리뷰 에이전트와 무손실 종합, 결정론적 게이트 훅. React + Vite + Supabase.",
-      "version": "0.33.0"
+      "version": "0.34.0"
     }
   ]
 }

@@ -19,6 +19,8 @@ Claude Code 플러그인이다. 플러그인을 설치한 **다른 프로젝트*
 | `scripts/synthesize.py` | 복수 리뷰 원장 무손실 종합 검사 | 센서 · 계산형 |
 | `scripts/doctor.py` | 참조·버전·스킬 규격·eval 구조 점검 | 센서 · 계산형 |
 | `scripts/eval.sh`, `evals/` | 행동 eval — 플러그인 유무에 따른 점수 차(Δ) | 측정 |
+| `scripts/eval-report.py` | eval 결과 집계 — 모델·케이스별 Δ·pass^k, 기준 미만이면 exit 1 | 측정 |
+| `scripts/ablate.py` | 훅별 ablation — 훅 하나를 뺀 사본으로 관련 케이스 재실행 | 측정 |
 | `tests/` | 훅 계약 테스트 · 종합 스크립트 테스트 · 뮤테이션 테스트 | 측정 |
 
 가이드 = 행동 전에 방향을 준다(피드포워드). 센서 = 행동 뒤에 잡는다(피드백). 계산형 = 결정론, 추론형 = 모델 판단.
@@ -50,7 +52,8 @@ python3 -m unittest discover -s tests -v              # 훅 계약 + 종합 (빠
 HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation   # 뮤테이션 (~2분)
 python3 scripts/doctor.py                             # 드리프트·죽은 참조 (CI)
 claude plugin validate --strict .                     # 매니페스트
-MODEL=haiku RUNS=1 scripts/eval.sh                    # 행동 eval (비용 발생, 수동)
+MODEL=haiku RUNS=3 scripts/eval.sh                    # 행동 eval (사용량 소모, 수동)
+python3 scripts/eval-report.py evals/results/*.json   # Δ·pass^k 집계
 ```
 
 eval 은 모델 비용과 플랜 사용량을 쓴다. PR 마다 돌리지 않고 GitHub Actions `eval` 워크플로(수동 실행)나 로컬에서 돌린다.

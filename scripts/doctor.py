@@ -6,7 +6,8 @@
   2. plugin.json 과 marketplace.json 의 버전이 같다
   3. 스킬·에이전트·docs·README 의 내부 경로 참조(`${CLAUDE_PLUGIN_ROOT}/…`, 상대 링크)가 실재한다
   4. 스킬 frontmatter — name 이 디렉터리명과 같고, description 이 있으며 1024자 이하
-  5. SKILL.md 500줄 미만, 100줄 넘는 SKILL.md 는 목차(## 제목 3개 이상)가 있다
+  5. SKILL.md 500줄 미만, 100줄 넘는 SKILL.md 는 실제 목차(`## 목차` 아래 항목 3개 이상)가 있다
+  9. README·AGENTS 의 개수 표기(훅·에이전트·스킬·eval 케이스·뮤턴트)가 실제와 같다
   6. 에이전트 frontmatter — name·description 이 있다
   7. eval 케이스마다 grader 가 하나 이상 있다
   8. frontmatter 값이 엄격한 YAML 에서도 문자열로 읽힌다(따옴표 없는 `[`·`{`·백틱 시작, 값 안의 `: `)
@@ -109,8 +110,45 @@ def check_skills():
         n = text.count("\n")
         if n >= 500:
             bad(rel, f"{n}줄 ≥ 500 — 참조 파일로 쪼갤 것")
-        if n > 100 and len(re.findall(r"^## ", text, re.M)) < 3:
-            bad(rel, f"{n}줄인데 목차 역할의 ## 제목이 3개 미만")
+        if n > 100 and not TOC.search(text):
+            bad(rel, f"{n}줄인데 `## 목차`(항목 3개 이상)가 없다")
+
+
+TOC = re.compile(r"^## 목차[ \t]*\n(?:[ \t]*\n)?(?:[ \t]*(?:[-*]|\d+\.)[ \t].*\n){3,}", re.M)
+
+
+def actual_counts() -> dict:
+    hj = json.loads((ROOT / "hooks/hooks.json").read_text())
+    scripts = {m for groups in hj["hooks"].values() for g in groups for h in g["hooks"]
+               for m in re.findall(r"hooks/([\w-]+)\.(?:py|sh)", h["command"])}
+    mut = (ROOT / "tests/test_mutation.py").read_text()
+    body = mut[mut.index("MUTANTS = ["):]
+    body = body[:body.index("\n]")]
+    return {
+        "훅": len(scripts),
+        "에이전트": len(list(ROOT.glob("agents/*.md"))),
+        "스킬": len(list(ROOT.glob("skills/*/SKILL.md"))),
+        "eval": len([c for c in ROOT.glob("evals/**/case.yaml") if "results" not in c.parts]),
+        "술어": len(re.findall(r'^    \("', body, re.M)),       # 항목 첫 줄(들여쓰기 4칸)만 센다
+    }
+
+
+# 문서의 개수 표기 — 숫자를 손으로 고치다 실제와 어긋나는 드리프트(v0.33 채점에서 지적)
+COUNT_CLAIMS = [
+    ("README.md", r"### 훅 (\d+)개", "훅"), ("README.md", r"### 에이전트 (\d+)개", "에이전트"),
+    ("README.md", r"### 스킬 (\d+)개", "스킬"), ("README.md", r"차단 술어 (\d+)개", "술어"),
+    ("README.md", r"eval 스위트 (\d+)케이스", "eval"),
+    ("AGENTS.md", r"훅 (\d+)개", "훅"), ("AGENTS.md", r"스킬 (\d+)개", "스킬"),
+]
+
+
+def check_counts():
+    real = actual_counts()
+    for f, pat, key in COUNT_CLAIMS:
+        text = (ROOT / f).read_text()
+        for m in re.finditer(pat, text):
+            if int(m.group(1)) != real[key]:
+                bad(f, f"'{m.group(0)}' 표기 ≠ 실제 {key} {real[key]}")
 
 
 def check_agents():
@@ -131,7 +169,7 @@ def check_evals():
 
 
 def main() -> int:
-    for fn in (check_hooks_json, check_versions, check_refs, check_skills, check_agents, check_evals):
+    for fn in (check_hooks_json, check_versions, check_refs, check_skills, check_agents, check_evals, check_counts):
         fn()
     if problems:
         print(f"doctor: 문제 {len(problems)}건")
