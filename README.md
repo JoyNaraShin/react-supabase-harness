@@ -224,7 +224,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 37개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 21케이스에서 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동 · CI 수동 잡(사용량 소모) |
-| 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 사용량 한도로 끊긴 런은 점수에서 뺀다. 기준 미만이면 exit 1 | eval 뒤 |
+| 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 실행되지 못한 런(한도·샌드박스 거부·인증 실패)은 점수에서 뺀다 — 세면 "아무 일도 없음"이 가짜 만점이 된다. 기준 미만이거나 유효 런이 없는 케이스가 있으면 exit 1 | eval 뒤 |
 | 훅별 ablation | `python3 scripts/ablate.py --model haiku --runs 3` | 훅 하나를 뺀 사본으로 그 훅이 지키는 케이스를 다시 돌려 기여도를 잰다. `claude plugin eval` 은 플러그인 전체 on/off 만 지원해서 직접 만들었다 | 훅을 더하거나 뺄 때(사용량 소모) |
 
 의존성 없이 표준 라이브러리만 쓴다(eval 은 Claude Code CLI 필요). 훅을 Claude Code 가 부르는 그대로(stdin JSON → stdout JSON) 실행한다 — "게이트는 결정론적이다"라는 주장의 근거가 이 테스트다.

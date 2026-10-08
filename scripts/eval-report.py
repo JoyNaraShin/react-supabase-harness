@@ -40,8 +40,13 @@ def aggregate(paths: list) -> dict:
         for model, case, arm, r in runs_of(doc):
             model = model_hint if model == "default" and model_hint else model
             e = acc[(model, case)]
-            if r.get("error") and "limit" in str(r.get("error")).lower():
-                e["errors"] += 1          # 사용량 한도로 끊긴 런은 점수에서 뺀다(공식 문서 권고)
+            err = str(r.get("error") or "")
+            if err and "maximum number of turns" not in err:
+                # 실행되지 못한 런(사용량 한도·샌드박스 거부·인증 실패 등)은 점수가 아니라 측정 실패다.
+                # 세면 "아무것도 안 일어남"이 not_contains 채점기를 통과시켜 가짜 만점이 된다(실측: CI 126런).
+                # 최대 턴 도달은 결과를 채점할 수 있으므로 남긴다.
+                e["errors"] += 1
+                e.setdefault("reasons", set()).add(err[:80])
                 continue
             e[arm].append(r)
     rows = []
@@ -52,7 +57,8 @@ def aggregate(paths: list) -> dict:
         mw, mwo = mean(w), mean(wo)
         rows.append({"model": model, "case": case, "k": len(w), "with": mw, "without": mwo,
                      "delta": (mw - mwo) if mw is not None and mwo is not None else None,
-                     "passK_with": allpass(w), "passK_without": allpass(wo), "limitErrors": e["errors"]})
+                     "passK_with": allpass(w), "passK_without": allpass(wo), "failedRuns": e["errors"],
+                     "failReasons": sorted(e.get("reasons", ()))})
     return {"rows": rows, "partial": partial}
 
 
@@ -92,10 +98,15 @@ def main() -> int:
                   f"평균 Δ {sum(ds) / len(ds):+.2f}" if ds else f"- {m}: 케이스 {len(rs)}")
         if res["partial"]:
             print(f"\n⚠ partial 결과(비용 상한·중단) 포함: {', '.join(res['partial'])} — 추세에서 뺄 것")
-        lim = sum(r["limitErrors"] for r in rows)
+        lim = sum(r["failedRuns"] for r in rows)
         if lim:
-            print(f"\n⚠ 사용량 한도로 끊긴 런 {lim}개는 점수에서 뺐다 — 재실행 필요")
+            reasons = sorted({x for r in rows for x in r["failReasons"]})
+            print(f"\n⚠ 실행되지 못한 런 {lim}개는 점수에서 뺐다 — 재실행 필요. 사유: " + " / ".join(reasons[:3]))
     if a.min_pass_k is not None:
+        empty = [r["case"] for r in rows if r["passK_with"] is None]
+        if empty:   # 유효한 런이 하나도 없는 케이스가 있으면 통과로 치지 않는다
+            print(f"측정 실패 케이스 {len(empty)}개: {', '.join(empty[:5])}", file=sys.stderr)
+            return 1
         pk = [r for r in rows if r["passK_with"] is not None]
         ratio = sum(r["passK_with"] for r in pk) / len(pk) if pk else 0
         if ratio < a.min_pass_k:

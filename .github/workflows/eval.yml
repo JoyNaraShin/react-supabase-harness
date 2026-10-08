@@ -34,6 +34,18 @@ jobs:
         with:
           node-version: "22"
       - run: npm install -g @anthropic-ai/claude-code
+      # eval 은 셸 도구를 OS 샌드박스 안에서만 돌린다 — 백엔드가 없으면 모든 런이 실행 전에 거부된다
+      # (실측: 126런 전부 "cannot confine it"). Linux 는 bubblewrap·socat, Ubuntu 24.04+ 는 bwrap 의
+      # user namespace 생성을 AppArmor 가 막으므로 bwrap 전용 프로필을 둔다(공식 sandboxing 문서).
+      - name: sandbox backend
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap socat ripgrep
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap > /dev/null
+            sudo systemctl reload apparmor
+          fi
+          bwrap --ro-bind / / --unshare-user true && echo "bwrap ok"
       - name: git identity (eval scaffold 와 스냅샷용)
         run: |
           git config --global user.name eval
@@ -54,9 +66,11 @@ jobs:
           MAX_COST: ${{ inputs.max_cost }}
         run: scripts/eval.sh
       - name: pass^k gate
+        env:
+          MIN_PASS_K: ${{ inputs.min_pass_k }}
         run: |
           python3 scripts/eval-report.py evals/results/*.json | tee -a "$GITHUB_STEP_SUMMARY"
-          python3 scripts/eval-report.py --min-pass-k "${{ inputs.min_pass_k }}" evals/results/*.json > /dev/null
+          python3 scripts/eval-report.py --min-pass-k "$MIN_PASS_K" evals/results/*.json > /dev/null
       - uses: actions/upload-artifact@v4
         if: always()
         with:
