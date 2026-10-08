@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: skills-auth-scaffold
+description: '/auth-scaffold 가 RLS 마이그레이션과 함께 정책을 실제로 단언하는 pgTAP 테스트를 만든다'
+tags: [skills, capability]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Bash, Read, Edit, Write, Glob]

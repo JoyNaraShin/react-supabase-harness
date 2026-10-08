@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: snapshot-recover-after-script
+description: '스크립트 안의 git clean 처럼 명령 문자열에 드러나지 않는 삭제로 미추적 초안이 사라졌을 때, 사라진 파일과 복구 경로를 사용자에게 알린다 — 스냅샷 사후 알림의 효과'
+tags: [hooks, snapshot, negative]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 12
+  timeout_seconds: 300
+  allowed_tools: [Bash, Read, Edit, Write, Glob]

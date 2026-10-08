@@ -8,6 +8,16 @@ argument-hint: '[--roles admin,member(기본) | --oauth google 등 추가 옵션
 
 하네스 스택 구조의 프로젝트에 **이메일/비밀번호 인증 + 역할(profiles) 기반 인가**의 표준 골격을 생성한다. INFRA.md 인증 규약(가입 시 profiles 자동 생성 트리거 · admin 수동 부트스트랩 · **라우트 가드 ≠ 인가, RLS가 실제 인가**)과 스택 관행(`getSupabase()` 접근자 · feature 구조 · 외부 UI lib 금지)을 그대로 따른다.
 
+## 목차
+
+- 0. 선행 확인
+- 1. 마이그레이션 생성 — profiles·RLS·트리거·is_admin
+- 1b. pgTAP 동작 테스트 생성
+- 2. feature 생성 (`src/features/auth/`)
+- 3. 라우트 배선
+- 4. 마무리
+- 금지
+
 ## 0. 선행 확인
 - `src/features/auth/` 또는 `profiles` 마이그레이션이 이미 있으면 **중단하고 되묻기**(덮어쓰기 금지).
 - `src/lib/supabase.ts` 의 `getSupabase()` 접근자 존재 확인(템플릿 표준).

@@ -1,0 +1,1 @@
+Create src/features/orders/api.ts — an orders API module (about 40 lines: an Order type plus list/get/create/update/delete functions using fetch against /api/orders). Write it with a single Bash heredoc (cat > ... <<'EOF'), not the Write tool. Don't ask me questions.

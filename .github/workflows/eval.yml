@@ -1,7 +1,10 @@
 name: eval
 
-# 모델 비용이 드는 행동 eval — 수동 실행만. 단위 테스트(test.yml)는 PR 마다 돈다.
-# 필요: 저장소 시크릿 ANTHROPIC_API_KEY.
+# 모델 사용량이 드는 행동 eval — 수동 실행만. 단위 테스트(test.yml)는 PR 마다 돈다.
+# 인증: 저장소 시크릿 CLAUDE_CODE_OAUTH_TOKEN — 구독(Pro/Max) 사용량으로 돈다(API 과금 없음).
+#   발급: 로컬에서 `claude setup-token` → `gh secret set CLAUDE_CODE_OAUTH_TOKEN`
+#   API 키는 일부러 넘기지 않는다 — 함께 있으면 API 과금 경로가 우선될 수 있다.
+# 판정: 케이스마다 k 런 모두 통과(pass^k)한 비율이 min_pass_k 미만이면 잡이 실패한다(scripts/eval-report.py).
 on:
   workflow_dispatch:
     inputs:
@@ -9,11 +12,14 @@ on:
         description: "모델 (haiku | sonnet | opus)"
         default: "haiku"
       runs:
-        description: "케이스당 런 수"
-        default: "1"
+        description: "케이스당 런 수 (pass^k 의 k)"
+        default: "3"
       max_cost:
-        description: "비용 상한 USD"
-        default: "5"
+        description: "비용 상한 USD (정가 환산 추정치)"
+        default: "10"
+      min_pass_k:
+        description: "with arm pass^k 통과 케이스 비율 하한 (0–1)"
+        default: "0.8"
 
 permissions:
   contents: read
@@ -21,20 +27,36 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - run: npm install -g @anthropic-ai/claude-code
+      - name: git identity (eval scaffold 와 스냅샷용)
+        run: |
+          git config --global user.name eval
+          git config --global user.email eval@example.com
+      - name: check token
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::error::시크릿 CLAUDE_CODE_OAUTH_TOKEN 이 없다 — 로컬에서 claude setup-token 후 gh secret set CLAUDE_CODE_OAUTH_TOKEN"
+            exit 1
+          fi
       - name: run eval
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           MODEL: ${{ inputs.model }}
           RUNS: ${{ inputs.runs }}
           MAX_COST: ${{ inputs.max_cost }}
         run: scripts/eval.sh
+      - name: pass^k gate
+        run: |
+          python3 scripts/eval-report.py evals/results/*.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/eval-report.py --min-pass-k "${{ inputs.min_pass_k }}" evals/results/*.json > /dev/null
       - uses: actions/upload-artifact@v4
         if: always()
         with:
