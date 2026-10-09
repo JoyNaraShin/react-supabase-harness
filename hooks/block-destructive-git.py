@@ -38,6 +38,9 @@ import re
 import shlex
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shellparse  # noqa: E402
+
 ENV_PREFIX = re.compile(r"^[A-Za-z_]\w*=")
 SHORT_C = re.compile(r"^-[a-z]*c$")
 OPERATORS = {"&&", "||", "|", "|&", ";", ";;", ";&", "&", "\n", "(", ")"}
@@ -463,7 +466,16 @@ def scan(command: str):
             return ("파싱 불가 명령에 파괴적 패턴 포함 — 안전을 위해 차단(사용자 승인 필요). "
                     "따옴표를 단순하게 하거나 커밋 메시지는 `-F <파일>` 로 넘겨라.")
         return None
+    known = {}
     for sub in split_subcommands(tokens):
+        # 같은 명령 안에서 정의한 변수는 펼쳐서 본다 — `S=/tmp/x && rm -rf $S` 의 대상은 깊은 경로다.
+        # 모르는 변수(명령 치환 결과 등)는 그대로 두어 빈 값일 수 있는 경로로 계속 막는다(fail closed).
+        if all(ENV_PREFIX.match(t) for t in sub) or (sub[0] == "export" and len(sub) > 1
+                                                     and all(ENV_PREFIX.match(t) for t in sub[1:])):
+            for t in (sub[1:] if sub[0] == "export" else sub):
+                shellparse.record_assignment(t, known)
+            continue
+        sub = [shellparse.expand_vars(t, known) for t in sub]
         # commit 승인 우회: 정확히 `CLAUDE_COMMIT_APPROVED=1 git commit ...` 만.
         if len(sub) >= 3 and sub[0] == "CLAUDE_COMMIT_APPROVED=1" and sub[1] == "git" and sub[2] == "commit":
             failed = verify_failed()

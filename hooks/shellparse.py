@@ -21,8 +21,12 @@ IN_PLACE = {"sed", "perl", "awk", "gawk"}
 REDIRECT = re.compile(r"(?<![0-9&<>-])>>?\|?\s*([^\s;&|<>()]+)|(?<![<>])[0-9]>>?\s*([^\s;&|<>()&]+)")
 
 
-def strip_heredoc_bodies(cmd: str) -> str:
-    """데이터 heredoc 본문을 지운다(헤더 줄은 남겨 `cat > f <<EOF` 의 리다이렉트는 그대로 본다)."""
+_FEEDS_POSIX_SHELL = re.compile(r"(?:^|[\s|(])(?:\S*/)?(?:bash|sh|zsh|dash|ash)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b")
+
+
+def strip_heredoc_bodies(cmd: str, shell_only: bool = False) -> str:
+    """데이터 heredoc 본문을 지운다(헤더 줄은 남겨 `cat > f <<EOF` 의 리다이렉트는 그대로 본다).
+    shell_only=True 면 셸이 읽는 본문만 남긴다 — python·node 본문은 실행되지만 셸 명령은 아니다."""
     lines, out, i = cmd.split("\n"), [], 0
     while i < len(lines):
         line = lines[i]
@@ -35,7 +39,7 @@ def strip_heredoc_bodies(cmd: str) -> str:
         while i < len(lines) and lines[i].strip() != tag:
             body.append(lines[i])
             i += 1
-        if _FEEDS_SHELL.search(line):
+        if (_FEEDS_POSIX_SHELL if shell_only else _FEEDS_SHELL).search(line):
             out += body                                    # 셸·인터프리터가 읽는 본문은 실행된다
         if i < len(lines):
             out.append(lines[i])
@@ -70,19 +74,52 @@ def neutralize_quotes(cmd: str) -> str:
     return "".join(out)
 
 
-def prep(cmd: str) -> str:
-    text = neutralize_quotes(strip_heredoc_bodies(cmd))
+def prep(cmd: str, shell_only: bool = False) -> str:
+    text = neutralize_quotes(strip_heredoc_bodies(cmd, shell_only))
     text = re.sub(r"(^|\s)#[^\n]*", r"\1", text)          # 주석은 실행되지 않는다
     return text
 
 
-def segments(cmd: str, cwd: str) -> list:
-    """(하위 명령, 그 시점의 cwd) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다."""
-    out, here = [], cwd
-    for seg in re.split(r"[;&|\n]+", prep(cmd).replace("(", " ").replace(")", " ")):
+_VAR_REF = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+# 셸의 현재 위치를 뜻하는 변수 — 훅 프로세스의 값은 Bash 의 위치가 아니다(`rm -rf $PWD` 를 깊은 경로로 오판).
+_SHELL_STATE = {"PWD", "OLDPWD"}
+_ASSIGN = re.compile(r"(?:export\s+)?([A-Za-z_]\w*)=(\S*)")
+
+
+def expand_vars(seg: str, known: dict) -> str:
+    """`$NAME`·`${NAME}` 을 실제 셸처럼 펼친다 — 같은 명령 안의 앞선 대입이 먼저, 그다음 환경변수.
+    Claude Code 의 Bash 는 호출마다 셸 상태가 새로 시작되므로 이 둘이 값의 전부다.
+    모르는 변수는 그대로 둔다(값을 모르는 채 빈 문자열로 추정하면 쓰기 대상을 놓칠 수 있다)."""
+    def sub(m):
+        name = m.group(1) or m.group(2)
+        val = known.get(name, None if name in _SHELL_STATE else os.environ.get(name))
+        return m.group(0) if val is None else val
+    return _VAR_REF.sub(sub, seg)
+
+
+def record_assignment(seg: str, known: dict) -> bool:
+    """`S=/path` · `export S=/path` 만으로 된 하위 명령이면 값을 기억하고 True.
+    값에 명령 치환(`$(…)`·백틱)이 있으면 결과를 알 수 없으니 기억하지 않는다(모르는 변수로 남는다).
+    `S=x cmd` 처럼 명령 앞에 붙은 대입은 그 명령의 환경일 뿐 셸 변수가 아니다."""
+    m = _ASSIGN.fullmatch(seg.strip())
+    if not m:
+        return False
+    if "$(" not in m.group(2) and "`" not in m.group(2):
+        known[m.group(1)] = expand_vars(m.group(2), known)
+    else:
+        known.pop(m.group(1), None)
+    return True
+
+
+def segments(cmd: str, cwd: str, shell_only: bool = False) -> list:
+    """(하위 명령, 그 시점의 cwd) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다.
+    변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다."""
+    out, here, known = [], cwd, {}
+    for seg in re.split(r"[;&|\n]+", prep(cmd, shell_only).replace("(", " ").replace(")", " ")):
         seg = seg.strip()
-        if not seg:
+        if not seg or record_assignment(seg, known):
             continue
+        seg = expand_vars(seg, known)
         m = re.match(r"(?:builtin\s+)?cd\s+(\S+)\s*$", seg)
         if m:
             d = os.path.expanduser(m.group(1))

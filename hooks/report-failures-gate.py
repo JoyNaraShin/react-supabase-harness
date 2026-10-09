@@ -23,6 +23,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shellparse  # noqa: E402
+
 # 실패를 언급했다고 인정하는 어휘. 넓게 잡는다 — 목적은 문체 강제가 아니라 누락 방지다.
 MENTION = re.compile(
     r"실패|차단|거부|막힘|막혔|불가|안 ?됐|안 ?됨|오류|에러|타임아웃|우회|되돌|원복|한계|"
@@ -73,6 +76,11 @@ DENIAL = re.compile(
     r"permission|denied|not allowed|blocked|refused|hook error|blocked by .{0,20}hook|권한|거부|차단|승인"
     r"|operation not permitted", re.IGNORECASE)
 LEAD_STRIP = {"sudo", "doas", "command", "nohup", "time", "env", "nice", "stdbuf"}
+# 셸 문법어는 명령이 아니다 — `for d in x; do rm "$d"; done` 의 `done` 을 명령으로 세어
+# '실패했던 done 이 성공했다'는 거짓 정정 요구가 나왔다(2026-10-09 실사용).
+SHELL_LEAD = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}"}
+SHELL_CLOSE = {"done", "fi", "esac"}
+SHELL_HEADER = {"for", "case", "select", "function", "in"}
 LONG_FLAG = {"--force": "f", "--recursive": "r", "--verbose": "v", "--all": "a"}
 
 
@@ -85,8 +93,11 @@ def _segment_shape(seg: str):
     seg = re.sub(r"\d?>>?\s*\S+|<\s*\S+", " ", seg)          # 리다이렉트는 신원이 아니다
     toks = [t for t in re.split(r"\s+", seg.strip()) if t]
     while toks:
-        if re.match(r"^[A-Za-z_]\w*=", toks[0]) or os.path.basename(toks[0]) in LEAD_STRIP:
+        if (re.match(r"^[A-Za-z_]\w*=", toks[0]) or os.path.basename(toks[0]) in LEAD_STRIP
+                or toks[0] in SHELL_LEAD or toks[0] in SHELL_CLOSE):
             toks = toks[1:]
+        elif toks[0] in SHELL_HEADER:
+            return None
         elif os.path.basename(toks[0]) == "timeout" and len(toks) > 1:
             toks = toks[2:]
         else:
@@ -125,8 +136,10 @@ def cmd_shapes(tool: str, ti: dict) -> list:
     """추적 가능한 '명령 모양' 목록. `cd x && cmd` 처럼 이어진 명령은 하위 명령마다 본다."""
     if tool != "Bash":
         return []
+    # 공용 파서로 하위 명령을 나눈다 — heredoc 본문·따옴표 속 문자열·주석은 명령이 아니고, 같은 명령 안의
+    # 변수는 펼친다(게이트끼리 같은 명령을 다르게 읽지 않게). `cd X` 는 신원이 아니라 segments 가 이미 뺀다.
     c = (ti.get("command") or "").strip()
-    return [s for s in (_segment_shape(seg) for seg in re.split(r"&&|\|\|?|;|\n", c)) if s]
+    return [s for s in (_segment_shape(seg) for seg, _ in shellparse.segments(c, ".", shell_only=True)) if s]
 
 
 def cmd_shape(tool: str, ti: dict):

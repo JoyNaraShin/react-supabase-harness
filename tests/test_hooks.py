@@ -342,6 +342,17 @@ class DestructiveGitTest(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
 
+    def test_rm_expands_variables_defined_in_the_same_command(self):
+        # 2026-10-09 실사용: `S=<깊은 스크래치 경로> && rm -rf $S` 가 '빈 값일 수 있는 변수'로 막혔다
+        for c in ["S=/private/tmp/claude/scratch/x && rm -rf $S", "S=/tmp/a/b; rm -rf ${S}/c",
+                  "export S=/tmp/a/b && rm -rf $S/out"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+        for c in ["S=$(pwd) && rm -rf $S", "S=. && rm -rf $S", "S=~ ; rm -rf $S", "rm -rf $UNDEFINED_X/",
+                  "S=/tmp/a/b && S=/Users/me && rm -rf $S"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+
     def test_git_boundary(self):
         # 오탐 / 미탐
         for c in ["find . -name '*.pyc' -delete", "git restore --staged a.ts", "git revert --no-commit HEAD"]:
@@ -559,6 +570,23 @@ class ReportFailuresTest(unittest.TestCase):
                 self.assertEqual(mod.cmd_shapes("Bash", {"command": c})[0], base[0])
         self.assertEqual(mod.cmd_shapes("Bash", {"command": "git push -f origin main"}),
                          mod.cmd_shapes("Bash", {"command": "git push --force origin main"}))
+
+    def test_shell_grammar_and_interpreter_bodies_are_not_identities(self):
+        # 2026-10-09 실사용: `for … ; do …; done` 의 `done` 이 '실패→성공한 명령'으로 잡혀 거짓 정정을 요구했다
+        mod = load_module("report-failures-gate.py")
+        shapes = mod.cmd_shapes("Bash", {"command": 'for d in a b; do rm -rf "$d"; done; if true; then ls x; fi'})
+        self.assertFalse([x for x in shapes if x.split()[0] in ("done", "for", "do", "fi", "then", "if")], shapes)
+        self.assertIn("rm -fr $d", shapes)
+        body = mod.cmd_shapes("Bash", {"command": "python3 - <<'EOF'\nimport json\nprint(json.dumps(1))\nEOF"})
+        self.assertFalse([x for x in body if x.startswith(("import", "print"))], body)
+        self.assertIn("rm -fr x", mod.cmd_shapes("Bash", {"command": "bash <<'EOF'\nrm -rf x\nEOF"}))
+
+    def test_done_keyword_does_not_count_as_a_reversal(self):
+        loop = 'for d in a b; do rm -rf "$d"; done'
+        lines = [user_text("a"), tool_use("a", "for d in x; do git push origin $d; done"),
+                 tool_result("a", True, "PreToolUse:Bash hook error: blocked"), say("푸시가 차단됐습니다."),
+                 user_text("b"), tool_use("b", loop), tool_result("b", False), say("정리했습니다.")]
+        self.assertIsNone(self.stop(lines))
 
     def test_ordinary_failure_then_other_target_is_not_a_reversal(self):
         # A38: 판단이 아니라 상황인 실패(없음·네트워크) 뒤의 다른 대상 성공에 거짓 정정을 요구했다
@@ -1120,6 +1148,16 @@ class PlanFirstShellTest(_RepoCase):
                   f"cat > notes.md <<'EOF'\n{self.BIG}\nEOF", f"cat > /tmp/src/x.ts <<'EOF'\n{self.BIG}\nEOF"]:
             with self.subTest(c=c[:40]):
                 self.assertIsNone(self.gate("Bash", {"command": c}))
+
+    def test_variable_targets_resolve_like_the_shell(self):
+        # 2026-10-09 실사용: `S=<스크래치> && … > $S/…/x.sql` 이 '프로젝트/$S/…' 로 읽혀 플랜 게이트에 막혔다
+        out_tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(out_tmp, ignore_errors=True))
+        ok = f"S={out_tmp} && mkdir -p $S/supabase/migrations && cat > $S/supabase/migrations/a.sql <<'EOF'\n{self.BIG}\nEOF"
+        self.assertIsNone(self.gate("Bash", {"command": ok}))
+        # 같은 명령 안에서 프로젝트를 가리키면 그대로 막는다
+        bad = f"D=src && cat > $D/new.ts <<'EOF'\n{self.BIG}\nEOF"
+        self.assertTrue(denied(self.gate("Bash", {"command": bad})))
 
     def test_a_plan_unlocks_shell_writes(self):
         Path(self.proj, "docs", "plans").mkdir()

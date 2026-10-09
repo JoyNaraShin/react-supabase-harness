@@ -34,6 +34,8 @@ MUTANTS = [
     ("command-regex-always", "gate-engine.py", "p_command_regex", "(True, 'x')"),
     ("snapshot-post-noop", "snapshot-guard.py", "post", "None"),
     ("snapshot-never", "gitsnap.py", "snapshot", "None"),
+    ("expand-vars-noop", "shellparse.py", "expand_vars", "seg"),
+    ("record-assignment-never", "shellparse.py", "record_assignment", "False"),
     ("changed-paths-none", "gitsnap.py", "changed_paths", "[]"),
     ("snapshot-read-only-always", "snapshot-guard.py", "_read_only", "True"),
     ("verify-failed-never", "block-destructive-git.py", "verify_failed", "None"),
