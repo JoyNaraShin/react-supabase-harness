@@ -67,6 +67,9 @@ def ctx_from(data: dict) -> dict:
 DELETE_VERBS = {"rm", "unlink", "rmdir", "shred"}
 
 
+UNKNOWN_WRITE = "\0unknown-write-target"                  # 어떤 경로 규칙에든 걸린다 — 모르는 쓰기는 보수적으로
+
+
 def _bash_writes(ctx) -> list:
     """Bash 가 프로젝트 안에 쓰는 (절대 경로, 동사) 목록. heredoc·cp·sed -i 로 만든 코드도 Write 와 같은 축으로 본다."""
     if "writes" not in ctx:
@@ -74,10 +77,15 @@ def _bash_writes(ctx) -> list:
         for seg, here in shellparse.segments(ctx["command"], ctx["cwd"]):
             toks = shellparse._tokens(seg)
             verb = toks[0].rsplit("/", 1)[-1] if toks else ""
-            for t in shellparse.write_targets(seg, ctx["command"]):
-                p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
-                if os.path.realpath(p).startswith(base + os.sep):
-                    out.append((p.replace("\\", "/"), verb))
+            for t0 in shellparse.write_targets(seg, ctx["command"]):
+                exp = shellparse.brace_expand(t0)
+                if exp is None:                          # 중괄호 확장이 너무 커서 전부 볼 수 없다 — 모르는 대상
+                    out.append((UNKNOWN_WRITE, verb))
+                    continue
+                for t in exp:
+                    p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
+                    if os.path.realpath(p).startswith(base + os.sep):
+                        out.append((p.replace("\\", "/"), verb))
         ctx["writes"] = out
     return ctx["writes"]
 
@@ -157,7 +165,7 @@ def _pkg_hit(spec: str, banned: list):
 def p_path_glob(ctx, a):
     pats = a if isinstance(a, list) else [a]
     if ctx["tool"] == "Bash":
-        hits = [w for w in _bash_writes(ctx) if any(fnmatch.fnmatch(w[0], g) for g in pats)]
+        hits = [w for w in _bash_writes(ctx) if w[0] == UNKNOWN_WRITE or any(fnmatch.fnmatch(w[0], g) for g in pats)]
         ctx["matched_writes"] = hits
         return (bool(hits), hits[0][0] if hits else "")
     p = ctx["path"]

@@ -83,7 +83,10 @@ def prep(cmd: str, shell_only: bool = False) -> str:
 _VAR_REF = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
 VAR_ANY = re.compile(r"\$(?:\{[^}]*\}|[A-Za-z_]\w*|[0-9@*#?$!-])")
 # 값: 리터럴만. 따옴표·치환·메타문자·글롭(`*?[`)·틸드(대입값에서 펼쳐진다)·중괄호가 있으면 모르는 값이다.
-_ASSIGN = re.compile(r"(?:export\s+)?([A-Za-z_]\w*)=((?:[^\s'\"`;&|<>()\\$*?\[\]~{}]|\$\{?[A-Za-z_]\w*\}?)*)")
+# 값은 펼쳐서 명령 문자열에 다시 넣었을 때 같은 뜻으로 읽히는 문자만 인정한다(허용 목록). `#` 같은 문자는 펼친 자리가
+# 단어 첫머리면 주석이 돼서 뒤의 쓰기·삭제 대상을 파서에게서 숨긴다 — 실제 bash 에서 `$C` 는 그냥 글자 `#` 다
+# (0.35.1–0.35.2 우회, 2026-10-09 커밋 보안 리뷰).
+_ASSIGN = re.compile(r"(?:export\s+)?([A-Za-z_]\w*)=((?:[\w./:@%+=-]|\$\{?[A-Za-z_]\w*\}?)*)")
 _STMT_SPLIT = re.compile(r"(&&|\|\||[;&|\n])")
 # bash 에서 변수 값을 바꾸거나 해석을 바꿀 수 있는 수단의 닫힌 목록(bash 매뉴얼 기준) — 대입 낱말과
 # for/select 변수 외의 전부다. 하나라도 있으면 아무 변수도 펼치지 않는다: eval·source·`.`(임의 코드),
@@ -171,7 +174,7 @@ def expand_vars(text: str, known: dict) -> str:
 
 
 def expand_command(cmd: str, known: dict) -> str:
-    """명령 문자열에서 확정된 변수를 bash 처럼 펼친다 — 작은따옴표·`$'…'`·`\$` 와 heredoc 본문 안은 펼치지 않는다."""
+    """명령 문자열에서 확정된 변수를 bash 처럼 펼친다 — 작은따옴표·`$'…'`·`\\$` 와 heredoc 본문 안은 펼치지 않는다."""
     if not known:
         return cmd
     lines, out, i = cmd.split("\n"), [], 0
@@ -247,6 +250,92 @@ def _tokens(seg: str) -> list:
         else:
             break
     return toks
+
+
+_RANGE = re.compile(r"(-?\d+|[^\d])\.\.(-?\d+|[^\d])(?:\.\.(-?\d+))?")
+
+
+def _brace_range(body: str):
+    """`{1..5}`·`{1..9..2}`·`{a..e}`·`{/../}` → (개수, 항목, 이식성). 범위가 아니면 None(그대로 둔다).
+    단계(`..2`)와 글자 아닌 문자 범위는 bash 4+ 만 펼친다 — 이식성 False."""
+    m = _RANGE.fullmatch(body)
+    if not m:
+        return None
+    x, y, st = m.group(1), m.group(2), abs(int(m.group(3) or 1)) or 1
+    num = lambda v: re.fullmatch(r"-?\d+", v) is not None
+    if num(x) and num(y):
+        a, b = int(x), int(y)
+        conv = str
+    elif len(x) == 1 and len(y) == 1 and not num(x) and not num(y):
+        a, b = ord(x), ord(y)
+        conv = chr
+    else:
+        return None
+    step = st if a <= b else -st
+    n = abs(b - a) // st + 1
+    portable = m.group(3) is None and (conv is str or (x.isalpha() and y.isalpha()))
+    return n, (conv(a + k * step) for k in range(n)), portable
+
+
+def brace_expand(t: str, limit: int = 256):
+    """bash 중괄호 확장(`a{,/..}`·`{1..3}`·`{a..c}`) — 대상 하나가 여러 경로가 된다. 결과가 limit 을 넘으면 None
+    (전부 보지 못한 판정은 판정이 아니다 — 잘라서 앞부분만 보면 뒤에 숨긴 대상을 놓친다). `${…}`·따옴표 안은 확장하지 않는다."""
+    depth, start, m, q = 0, -1, None, None
+    for i, ch in enumerate(t):
+        if q:
+            q = None if ch == q else q
+            continue
+        if ch in "'\"":
+            q = ch
+        elif ch == "{" and (i == 0 or t[i - 1] != "$"):
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                m = (start, i)
+                break
+    if not m:
+        if depth and start >= 0:                             # 닫히지 않은 `{` 는 글자 — 그 뒤의 중괄호는 펼쳐진다
+            rest = brace_expand(t[start + 1:], limit)
+            return None if rest is None else [t[:start + 1] + x for x in rest]
+        return [t]
+    pre, body, post = t[:m[0]], t[m[0] + 1:m[1]], t[m[1] + 1:]
+    items, d, cur = [], 0, ""
+    for ch in body:                                          # 최상위 쉼표로 나눈다
+        if ch == "," and d == 0:
+            items.append(cur)
+            cur = ""
+            continue
+        d += ch == "{"
+        d -= ch == "}"
+        cur += ch
+    items.append(cur)
+    r, portable = None, True
+    if len(items) == 1:
+        r = _brace_range(body)
+        if r is None:                                        # `{x}` 는 확장되지 않는다 — 뒤쪽 중괄호는 본다
+            rest = brace_expand(post, limit)
+            return None if rest is None else [pre + "{" + body + "}" + x for x in rest]
+        n, gen, portable = r
+        if n > limit:
+            return None
+        items = list(gen)
+    out = []
+    if r is not None and not portable:                       # bash 3.2 는 그대로 두고 4+ 는 펼친다 — 둘 다 본다
+        rest = brace_expand(post, limit)
+        if rest is None:
+            return None
+        out += [pre + "{" + body + "}" + x for x in rest]
+    for it in items:
+        sub = brace_expand(pre + it + post, limit)
+        if sub is None:
+            return None
+        out += sub
+        if len(out) > limit:
+            return None
+    return out
 
 
 def write_targets(seg: str, whole: str = "") -> list:

@@ -130,7 +130,8 @@ class ShellDifferentialTest(unittest.TestCase):
         import random
         rnd = random.Random(int(os.environ.get("HARNESS_FUZZ_SEED", "20261009")))
         n = int(os.environ.get("HARNESS_FUZZ_N", "2500"))
-        vals = ["/tmp/hx/a/b", "/tmp/hx/a/b/../../..", ".", "..", "x/..", "/", "build", "a b", "/tmp/hx/*"]
+        vals = ["/tmp/hx/a/b", "/tmp/hx/a/b/../../..", ".", "..", "x/..", "/", "build", "a b", "/tmp/hx/*",
+                "#", "x#", "a,b", "/tmp/hx/a,..", "-", "=/"]                 # 펼친 뒤 다시 읽으면 뜻이 바뀌는 값
         q = [lambda v: v, lambda v: f"'{v}'", lambda v: f'"{v}"', lambda v: f"$'{v}'"]
         stmts = [
             lambda: f"S={rnd.choice(q)(rnd.choice(vals))}", lambda: f"export S={rnd.choice(vals)}",
@@ -145,7 +146,9 @@ class ShellDifferentialTest(unittest.TestCase):
         ]
         targets = ["$S", '"$S"', "${S}", "$S/", "$S/..", "$S/*", "${A[0]}", '"${A[@]}"', "$1", '"$@"', "$T",
                    "${S%/*}", "${S#/}", "$S{,/..}", "~", "~+", "~-", "$PWD", "$OLDPWD", "*", "./*", "../*",
-                   "work", "../work", "$S/../work", "${S:-/}", "${S:+/}", "\\\n$S"]
+                   "work", "../work", "$S/../work", "${S:-/}", "${S:+/}", "\\\n$S",
+                   "$S ~", "x $S /", "{$S}/..", "/tmp/hx/{$S}/../..", "/tmp/hx/{a{1..300},..}/..",
+                   "/tmp/hx/{/../}/..", "/tmp/hx/a/{1..9..4}/../../..", "/tmp/hx/{a..c}/../..", "{,$S}"]
         joins = ["; ", " && ", "\n", " || ", " | ", " & "]
         misses, checked = [], 0
         for _ in range(n):

@@ -295,47 +295,6 @@ def _join(here: str, t: str) -> str:
     return here + "/" + t if here.startswith("~") else os.path.normpath(os.path.join(here, t))
 
 
-def brace_expand(t: str, limit: int = 128) -> list:
-    """bash 중괄호 확장(`a{,/..}`·`{1..3}`) — 삭제 대상 하나가 여러 경로가 된다(생성형 차분 테스트가 찾음)."""
-    m = None
-    depth, start = 0, -1
-    for i, ch in enumerate(t):
-        if ch == "{" and (i == 0 or t[i - 1] != "$"):
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}" and depth:
-            depth -= 1
-            if depth == 0:
-                m = (start, i)
-                break
-    if not m:
-        return [t]
-    pre, body, post = t[:m[0]], t[m[0] + 1:m[1]], t[m[1] + 1:]
-    items, d, cur = [], 0, ""
-    for ch in body:                                          # 최상위 쉼표로 나눈다
-        if ch == "," and d == 0:
-            items.append(cur)
-            cur = ""
-            continue
-        d += ch == "{"
-        d -= ch == "}"
-        cur += ch
-    items.append(cur)
-    if len(items) == 1:
-        r = re.fullmatch(r"(-?\d+)\.\.(-?\d+)", body)
-        if not r:
-            return [t]                                       # `{x}` 는 확장되지 않는다
-        a, b = int(r.group(1)), int(r.group(2))
-        items = [str(k) for k in (range(a, b + 1) if a <= b else range(a, b - 1, -1))][:limit]
-    out = []
-    for it in items:
-        out += brace_expand(pre + it + post, limit)
-        if len(out) >= limit:
-            break
-    return out[:limit]
-
-
 def rm_candidates(t: str) -> list:
     """삭제 대상이 실제로 가리킬 수 있는 경로들. 하나라도 위험하면 막는다(None = 위치를 몰라 알 수 없음).
     - 모르는 변수는 비어 있을 수 있다: `$X/tmp` 는 `/tmp` 일 수 있다(0.35.0 까지 통과하던 구멍).
@@ -351,7 +310,13 @@ def rm_candidates(t: str) -> list:
             lambda m: (re.match(r"\$\{\w+:?-([^}$`]*)\}$", m.group(0)) or [None, ""])[1], t)
         if empty:
             out.append(empty)
-    out = [b for c in out for b in brace_expand(c)]
+    exp = []
+    for c in out:
+        e = shellparse.brace_expand(c)
+        if e is None:
+            return [None]                                    # 확장 결과가 너무 많다 — 다 보지 못하면 모르는 것
+        exp += e
+    out = exp
     res = []
     for c in out:
         if c.startswith(("/", "~", "$")):

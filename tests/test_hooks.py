@@ -389,7 +389,10 @@ class DestructiveGitTest(unittest.TestCase):
         # 생성형 차분 퍼즈(seed 1·2)가 찾은 것 — 중괄호 확장은 대상 하나를 여러 경로로 만들고,
         # 서브셸·백그라운드의 cd 는 현재 셸 위치를 바꿀 수도 안 바꿀 수도 있다
         for c in ["rm -rf /tmp/x{,/../..}", "rm -rf ~/{a,}", "rm -rf /{tmp,usr}/../",
-                  "S=/; rm -rf $S{,/..}", "( cd / ) ; rm -rf build", "{ cd /; } & rm -rf build"]:
+                  "S=/; rm -rf $S{,/..}", "( cd / ) ; rm -rf build", "{ cd /; } & rm -rf build",
+                  # 0.35.2 커밋 보안 리뷰 — 확장 상한에서 잘라 뒤를 안 봤고(fail-open), 펼친 `#` 이 주석이 됐다
+                  "rm -rf /tmp/{a{1..200},..}/usr", "C=#; rm -rf $C /", "C=#; rm -rf x $C ~",
+                  "rm -rf /tmp/{/../}/..", "rm -rf /tmp/x/{1..9..4}/../../.."]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
         for c in ["rm -rf dist/{a,b}", "rm -rf /tmp/{x,y}-cache", "rm -rf build/{1..3}"]:
@@ -1150,6 +1153,16 @@ class ThirdReviewSelfProtectionTest(unittest.TestCase):
                   "D=/tmp/x; for D in .claude/state; do touch $D/plan-gate-off; done",
                   "D=/tmp/x; D=.claude/state; touch $D/plan-gate-off",
                   "D=/tmp/x | true; touch $D/.claude/state/plan-gate-off"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.bash(c)))
+
+    def test_expanded_values_and_braces_do_not_hide_gate_writes(self):
+        # 0.35.2 커밋 보안 리뷰 — 펼친 `#` 이 주석이 되어 뒤의 쓰기를 숨겼고, 중괄호 확장된 대상은 글자 그대로 비교됐다
+        for c in ["C=#; echo x $C > .claude/state/plan-gate-off",
+                  "C=#; echo x $C | tee .claude/state/plan-gate-off",
+                  "echo x | tee .claude/sta{te,x}/plan-gate-off",
+                  "touch .claude/state/plan-gate-o{ff,n}",
+                  "touch .claude/x{1..300}/y"]:                # 확장이 너무 크면 모르는 대상 — 막는다
             with self.subTest(c=c):
                 self.assertTrue(denied(self.bash(c)))
 
