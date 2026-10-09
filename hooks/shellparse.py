@@ -81,45 +81,152 @@ def prep(cmd: str, shell_only: bool = False) -> str:
 
 
 _VAR_REF = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
-# 셸의 현재 위치를 뜻하는 변수 — 훅 프로세스의 값은 Bash 의 위치가 아니다(`rm -rf $PWD` 를 깊은 경로로 오판).
-_SHELL_STATE = {"PWD", "OLDPWD"}
-_ASSIGN = re.compile(r"(?:export\s+)?([A-Za-z_]\w*)=(\S*)")
+VAR_ANY = re.compile(r"\$(?:\{[^}]*\}|[A-Za-z_]\w*|[0-9@*#?$!-])")
+# 값: 리터럴만. 따옴표·치환·메타문자·글롭(`*?[`)·틸드(대입값에서 펼쳐진다)·중괄호가 있으면 모르는 값이다.
+_ASSIGN = re.compile(r"(?:export\s+)?([A-Za-z_]\w*)=((?:[^\s'\"`;&|<>()\\$*?\[\]~{}]|\$\{?[A-Za-z_]\w*\}?)*)")
+_STMT_SPLIT = re.compile(r"(&&|\|\||[;&|\n])")
+# bash 에서 변수 값을 바꾸거나 해석을 바꿀 수 있는 수단의 닫힌 목록(bash 매뉴얼 기준) — 대입 낱말과
+# for/select 변수 외의 전부다. 하나라도 있으면 아무 변수도 펼치지 않는다: eval·source·`.`(임의 코드),
+# read·mapfile·readarray·getopts·printf -v·declare·typeset·local·readonly·let·`((…))`·coproc(이름에 쓰기),
+# `${x:=…}`·`${x=…}`(펼치며 대입), `${!x}`·declare -n(간접 참조), IFS(낱말 분할), trap(나중에 실행되는 문자열).
+_BAIL = re.compile(
+    r"(?<![\w.-])(?:eval|source|read|mapfile|readarray|getopts|declare|typeset|local|readonly|let|coproc|trap|IFS)(?![\w-])"
+    r"|(?<![\w.-])printf(?:\s+-\S+)*\s+-v\b|\(\(|\$\{!|\$\{[A-Za-z_]\w*:?[=?]|(?:^|[\s;&|(])\.\s")
+_SEQ = (None, ";", "\n", "&&")
 
 
-def expand_vars(seg: str, known: dict) -> str:
-    """`$NAME`·`${NAME}` 을 실제 셸처럼 펼친다 — 같은 명령 안의 앞선 대입이 먼저, 그다음 환경변수.
-    Claude Code 의 Bash 는 호출마다 셸 상태가 새로 시작되므로 이 둘이 값의 전부다.
-    모르는 변수는 그대로 둔다(값을 모르는 채 빈 문자열로 추정하면 쓰기 대상을 놓칠 수 있다)."""
+def leading_assignments(cmd: str) -> dict:
+    """값을 **확실히** 아는 변수만 돌려준다 — 그 밖은 모르는 값이고, 가드는 모르는 값을 보수적으로 다룬다.
+
+    Claude Code 의 Bash 는 호출마다 셸 상태가 새로 시작되므로, 확실한 값의 출처는 명령 맨 앞의 대입뿐이다.
+    인정: 명령 **맨 앞**에서 `&&`·`;`·줄바꿈으로만 이어진 무조건 리터럴 대입(`S=/a && T=$S/b && …`).
+    거부: 값을 바꿀 수단(`_BAIL`)이 명령 어디에든 있거나, 그 이름이 `$NAME`·`${NAME}` 말고 다른 꼴로 다시
+    나오면(재대입·`for S`·`unset S`) — 실제 셸의 값과 달라질 수 있다(v0.35.1 우회, 2026-10-09).
+    환경변수는 쓰지 않는다 — 훅 프로세스의 환경은 Bash 의 환경과 같다는 보장이 없다.
+    이 근사가 맞는지는 tests/test_shell_differential.py 가 실제 bash 로 대조한다."""
+    if _BAIL.search(cmd):
+        return {}
+    known, parts = {}, _STMT_SPLIT.split(cmd)
+    op = None
+    for i in range(0, len(parts), 2):
+        stmt = parts[i].strip()
+        nxt = parts[i + 1] if i + 1 < len(parts) else None
+        if not stmt:
+            if nxt not in _SEQ:
+                break
+            op = nxt
+            continue
+        m = _ASSIGN.fullmatch(stmt)
+        # `S=x | …`·`S=x & …` 는 서브셸, `false && S=x`·`S=x || …` 는 조건부 — 현재 셸 값이 확실하지 않다
+        if not m or op not in _SEQ or nxt not in _SEQ:
+            break
+        val = expand_vars(m.group(2), known)
+        if "$" in val:
+            break
+        known[m.group(1)] = val
+        op = nxt
+    # `&` 는 앞의 and-or 목록 전체(`S=x && T=y &`)를 백그라운드 서브셸로 보낸다 — 그 목록의 대입은 현재 셸에 없다.
+    # 확정 구간이 끝난 지점부터 그 목록의 끝(`;`·줄바꿈·`&`)을 찾아, `&` 로 끝나면 그 목록에서 얻은 값을 버린다.
+    list_names, j = [], 0
+    for k in range(0, len(parts), 2):
+        stmt, sep = parts[k].strip(), (parts[k + 1] if k + 1 < len(parts) else None)
+        m2 = _ASSIGN.fullmatch(stmt) if stmt else None
+        if m2 and m2.group(1) in known:
+            list_names.append(m2.group(1))
+        if sep in (";", "\n", None):
+            list_names = []
+            if not (m2 and m2.group(1) in known) and stmt:
+                break                                         # 확정 구간 밖으로 나왔다
+        elif sep == "&":
+            for n in list_names:
+                known.pop(n, None)
+            break
+        elif not (m2 and m2.group(1) in known):
+            # 확정 구간이 끝났지만 같은 목록이 이어진다(`S=x && cmd …`) — 목록 끝까지 계속 본다
+            continue
+    for name in list(known):
+        bare = len(re.findall(r"(?<![\w$])" + re.escape(name) + r"\b", cmd))
+        braced = len(re.findall(r"\$\{" + re.escape(name) + r"\}", cmd))
+        if bare - braced != 1:                               # 대입 그 자체 1회 외의 등장 = 값이 바뀔 수 있다
+            del known[name]
+    return known
+
+
+def is_tainted(name: str, cmd: str) -> bool:
+    """이 명령 안에서 값이 바뀔 수 있는 변수인가 — 값을 바꾸는 수단이 있거나 이름이 `$NAME` 말고 다른 꼴로 나온다.
+    그런 변수의 값은 환경값도 빈 값도 아닌 '아무 값'이다."""
+    if _BAIL.search(cmd):
+        return True
+    bare = len(re.findall(r"(?<![\w$])" + re.escape(name) + r"\b", cmd))
+    braced = len(re.findall(r"\$\{" + re.escape(name) + r"\b", cmd))
+    return bare - braced > 0
+
+
+def expand_vars(text: str, known: dict) -> str:
+    """확정된 변수만 펼친다(따옴표를 모르는 단순 치환 — 대입값 안에서만 쓴다)."""
     def sub(m):
-        name = m.group(1) or m.group(2)
-        val = known.get(name, None if name in _SHELL_STATE else os.environ.get(name))
+        val = known.get(m.group(1) or m.group(2))
         return m.group(0) if val is None else val
-    return _VAR_REF.sub(sub, seg)
+    return _VAR_REF.sub(sub, text)
 
 
-def record_assignment(seg: str, known: dict) -> bool:
-    """`S=/path` · `export S=/path` 만으로 된 하위 명령이면 값을 기억하고 True.
-    값에 명령 치환(`$(…)`·백틱)이 있으면 결과를 알 수 없으니 기억하지 않는다(모르는 변수로 남는다).
-    `S=x cmd` 처럼 명령 앞에 붙은 대입은 그 명령의 환경일 뿐 셸 변수가 아니다."""
-    m = _ASSIGN.fullmatch(seg.strip())
-    if not m:
-        return False
-    if "$(" not in m.group(2) and "`" not in m.group(2):
-        known[m.group(1)] = expand_vars(m.group(2), known)
-    else:
-        known.pop(m.group(1), None)
-    return True
+def expand_command(cmd: str, known: dict) -> str:
+    """명령 문자열에서 확정된 변수를 bash 처럼 펼친다 — 작은따옴표·`$'…'`·`\$` 와 heredoc 본문 안은 펼치지 않는다."""
+    if not known:
+        return cmd
+    lines, out, i = cmd.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(_expand_line(line, known))
+        i += 1
+        m = _HEREDOC.search(line)
+        if not m:
+            continue
+        while i < len(lines) and lines[i].strip() != m.group(2):  # 본문은 그대로(인용 heredoc 은 펼치지 않는다)
+            out.append(lines[i])
+            i += 1
+        if i < len(lines):
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out)
+
+
+def _expand_line(line: str, known: dict) -> str:
+    out, i, n, dq = [], 0, len(line), False
+    while i < n:
+        ch = line[i]
+        if ch == "\\" and i + 1 < n:
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if not dq and (ch == "'" or line.startswith("$'", i)):
+            j = line.find("'", i + (2 if ch == "$" else 1))
+            j = n if j < 0 else j + 1
+            out.append(line[i:j])
+            i = j
+            continue
+        if ch == '"':
+            dq = not dq
+        elif ch == "$":
+            m = _VAR_REF.match(line, i)
+            if m and (m.group(1) or m.group(2)) in known:
+                out.append(known[m.group(1) or m.group(2)])
+                i = m.end()
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def segments(cmd: str, cwd: str, shell_only: bool = False) -> list:
     """(하위 명령, 그 시점의 cwd) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다.
-    변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다."""
-    out, here, known = [], cwd, {}
+    확정된 변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다."""
+    out, here = [], cwd
+    cmd = expand_command(cmd, leading_assignments(cmd))
     for seg in re.split(r"[;&|\n]+", prep(cmd, shell_only).replace("(", " ").replace(")", " ")):
         seg = seg.strip()
-        if not seg or record_assignment(seg, known):
+        if not seg:
             continue
-        seg = expand_vars(seg, known)
         m = re.match(r"(?:builtin\s+)?cd\s+(\S+)\s*$", seg)
         if m:
             d = os.path.expanduser(m.group(1))

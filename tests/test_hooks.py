@@ -349,9 +349,52 @@ class DestructiveGitTest(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertIsNone(self.check(c))
         for c in ["S=$(pwd) && rm -rf $S", "S=. && rm -rf $S", "S=~ ; rm -rf $S", "rm -rf $UNDEFINED_X/",
-                  "S=/tmp/a/b && S=/Users/me && rm -rf $S"]:
+                  "S=/tmp/a/b && S=/Users/me && rm -rf $S", "rm -rf $HOME"]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
+
+    def test_rm_variable_values_that_can_change_stay_unknown(self):
+        # v0.35.1 보안 회귀(백그라운드 보안 리뷰, 2026-10-09): 첫 대입값으로 판정해 실제 값이 `/` 인 삭제를 통과시켰다.
+        # 재대입·조건부·서브셸 대입은 값이 달라질 수 있다 — 모르는 값으로 남아 막혀야 한다.
+        for c in ["S=/tmp/a/b; S+=/../../..; rm -rf $S",
+                  "S=/tmp/a/b; for S in /; do rm -rf $S; done",
+                  "S=/tmp/a/b | rm -rf $S/",
+                  "S=/tmp/a/b & rm -rf $S/",
+                  "false && S=/tmp/a/b; rm -rf $S/",
+                  "S=/tmp/a/b || S=/; rm -rf $S",
+                  "S=/tmp/a/b; read S <<< /; rm -rf $S",
+                  "S=/tmp/a/b; unset S; rm -rf $S/",
+                  "S=/tmp/a/b; eval 'S=/'; rm -rf $S",
+                  "S=/tmp/a/b; if true; then S=/; fi; rm -rf $S"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        self.assertIsNone(self.check("S=/tmp/a/b; T=$S/c && rm -rf $T"))
+
+    def test_rm_gaps_found_by_the_shell_differential(self):
+        # 실제 bash 대조(tests/test_shell_differential.py)가 찾은, 0.35.0 부터 있던 구멍들
+        for c in ["rm -rf /tmp/a/../..",                      # `..` 미정규화
+                  "X=$(echo hi); rm -rf $S",                   # `);` 가 한 토큰이라 뒤 명령이 앞 명령의 인자로 읽힘
+                  "cd / && rm -rf build",                      # cd 미추적 — 실제 대상은 /build
+                  "rm -rf $X/tmp",                             # 모르는 변수는 비어 있을 수 있다 → /tmp
+                  "S=/tmp/a/b && T=x & rm -rf $S/",            # `&` 는 and-or 목록 전체를 서브셸로
+                  "cd ~ && rm -rf $S/../work",
+                  'cd "$(pwd)" && rm -rf dist']:               # 위치를 모르면 상대 경로 삭제를 판정할 수 없다
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        for c in ['rm -rf "${TMPDIR:-/tmp}"/x', "cd /tmp && rm -rf build-x", "cd apps/web && rm -rf dist"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+
+    def test_rm_brace_expansion_and_subshell_cd(self):
+        # 생성형 차분 퍼즈(seed 1·2)가 찾은 것 — 중괄호 확장은 대상 하나를 여러 경로로 만들고,
+        # 서브셸·백그라운드의 cd 는 현재 셸 위치를 바꿀 수도 안 바꿀 수도 있다
+        for c in ["rm -rf /tmp/x{,/../..}", "rm -rf ~/{a,}", "rm -rf /{tmp,usr}/../",
+                  "S=/; rm -rf $S{,/..}", "( cd / ) ; rm -rf build", "{ cd /; } & rm -rf build"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        for c in ["rm -rf dist/{a,b}", "rm -rf /tmp/{x,y}-cache", "rm -rf build/{1..3}"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
 
     def test_git_boundary(self):
         # 오탐 / 미탐
@@ -1096,6 +1139,17 @@ class ThirdReviewSelfProtectionTest(unittest.TestCase):
                   "cp -r /tmp/st .claude/",
                   "git checkout other-branch -- .claude",
                   "python3 -c \"open('.claude/state/plan-gate-off','w')\""]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.bash(c)))
+
+    def test_variable_targets_on_gate_files(self):
+        # 변수 펼침(v0.35.1)이 보호 파일 쓰기를 숨기지 않는가 — 확정된 값이면 펼쳐서 막고,
+        # 바뀔 수 있는 값이면 첫 대입값(프로젝트 밖)으로 오판하지 않는다.
+        for c in ["D=.claude/state && touch $D/plan-gate-off",
+                  "D=.claude && cp /tmp/x ${D}/state/plan-gate-off",
+                  "D=/tmp/x; for D in .claude/state; do touch $D/plan-gate-off; done",
+                  "D=/tmp/x; D=.claude/state; touch $D/plan-gate-off",
+                  "D=/tmp/x | true; touch $D/.claude/state/plan-gate-off"]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.bash(c)))
 

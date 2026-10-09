@@ -43,6 +43,7 @@ import shellparse  # noqa: E402
 
 ENV_PREFIX = re.compile(r"^[A-Za-z_]\w*=")
 SHORT_C = re.compile(r"^-[a-z]*c$")
+SEPARATOR_CHARS = set("();|&")
 OPERATORS = {"&&", "||", "|", "|&", ";", ";;", ";&", "&", "\n", "(", ")"}
 WRAPPERS = {"bash", "sh", "zsh", "dash", "ash"}
 # raw-scan fallback (parse failure or internal error → fail closed). Patterns, not substrings:
@@ -155,7 +156,9 @@ def tokenize(command: str) -> list:
 def split_subcommands(tokens: list) -> list:
     cur, out = [], []
     for t in tokens:
-        if t in OPERATORS:
+        # shlex 는 이어진 구두점을 한 토큰으로 붙인다(`$(echo /); rm …` → `);`). 구분 문자로만 된 토큰은 전부
+        # 구분자다 — 아니면 뒤 명령이 앞 명령의 인자로 읽혀 검사를 건너뛴다(0.35.0 까지의 구멍, 차분 테스트가 찾음).
+        if t in OPERATORS or (t and set(t) <= SEPARATOR_CHARS):
             if cur:
                 out.append(cur)
                 cur = []
@@ -247,6 +250,24 @@ def dangerous_root(t: str) -> bool:
     t = t.strip("'\"")
     if re.fullmatch(r"(\$\{?\w+\}?|\$\(\s*pwd\s*\)|`pwd`)[/*]*", t):
         return True
+    # 디렉터리 스택 틸드: `~+` = cwd, `~-`·`~N` = 이전·스택 위치(알 수 없음) — 생성형 차분 테스트가 찾음
+    if re.match(r"~[+-]?\d*(?:/|$)", t) and t[:2] in ("~+", "~-") or re.match(r"~\d", t):
+        if t.startswith("~+"):
+            t = "." + t[2:]
+        else:
+            return True
+    # `..` 는 경로를 위로 올린다 — `/tmp/a/../..` 는 `/`, `x/..` 는 cwd 다(0.35.0 까지 통과하던 구멍).
+    if ".." in t.split("/") and not t.startswith("$"):
+        if t.startswith("~"):                                # `~/a/../..` — 홈 기준으로 푼다
+            rest = os.path.normpath(t[2:] or ".") if t.startswith("~/") else None
+            if rest is None or rest == ".." or rest.startswith("../"):
+                return True                                  # 홈 위로 올라간다
+            t = "~" if rest == "." else "~/" + rest
+        else:
+            n = os.path.normpath(t)
+            if not t.startswith("/") and (n == "." or n == ".." or n.startswith("../")):
+                return True
+            t = n
     t = t.rstrip("/") or "/"
     if t in (".", "..", "*", "./*", ".git", "./.git", "~", "~/*", "$HOME", "${HOME}",
              "$HOME/*", "${HOME}/*") or re.fullmatch(r"(\.\./)*\.\.(/\*)?", t):
@@ -263,6 +284,107 @@ def dangerous_root(t: str) -> bool:
             return len(parts) <= 3                   # /Users/me, /Users/me/Projects
         return "/" + parts[0] in SYSTEM_TOP and parts[0] != "tmp" and len(parts) <= 2  # /usr/local
     return False
+
+
+# 이 하위 명령이 실행될 때 있을 수 있는 위치들 — 원래 cwd 기준 상대 경로("."), 절대 경로, `~…`, 모르면 None.
+HERE = [["."]]
+CMD = [""]
+
+
+def _join(here: str, t: str) -> str:
+    return here + "/" + t if here.startswith("~") else os.path.normpath(os.path.join(here, t))
+
+
+def brace_expand(t: str, limit: int = 128) -> list:
+    """bash 중괄호 확장(`a{,/..}`·`{1..3}`) — 삭제 대상 하나가 여러 경로가 된다(생성형 차분 테스트가 찾음)."""
+    m = None
+    depth, start = 0, -1
+    for i, ch in enumerate(t):
+        if ch == "{" and (i == 0 or t[i - 1] != "$"):
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                m = (start, i)
+                break
+    if not m:
+        return [t]
+    pre, body, post = t[:m[0]], t[m[0] + 1:m[1]], t[m[1] + 1:]
+    items, d, cur = [], 0, ""
+    for ch in body:                                          # 최상위 쉼표로 나눈다
+        if ch == "," and d == 0:
+            items.append(cur)
+            cur = ""
+            continue
+        d += ch == "{"
+        d -= ch == "}"
+        cur += ch
+    items.append(cur)
+    if len(items) == 1:
+        r = re.fullmatch(r"(-?\d+)\.\.(-?\d+)", body)
+        if not r:
+            return [t]                                       # `{x}` 는 확장되지 않는다
+        a, b = int(r.group(1)), int(r.group(2))
+        items = [str(k) for k in (range(a, b + 1) if a <= b else range(a, b - 1, -1))][:limit]
+    out = []
+    for it in items:
+        out += brace_expand(pre + it + post, limit)
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def rm_candidates(t: str) -> list:
+    """삭제 대상이 실제로 가리킬 수 있는 경로들. 하나라도 위험하면 막는다(None = 위치를 몰라 알 수 없음).
+    - 모르는 변수는 비어 있을 수 있다: `$X/tmp` 는 `/tmp` 일 수 있다(0.35.0 까지 통과하던 구멍).
+    - 앞선 `cd` 가 위치를 바꿨으면 상대 경로는 거기서 푼다: `cd / && rm -rf build` 는 `/build` 다."""
+    out = [t]
+    names = re.findall(r"\$\{?([A-Za-z_]\w*)", t)
+    # 위치·특수 매개변수(`$@`·`$1`·`$*`)는 `set --`·`shift`·함수 인자로 바뀐다 — 값을 알 수 없다
+    if re.search(r"\$\{?[0-9@*#?$!-]", t) or any(shellparse.is_tainted(n, CMD[0]) for n in names):
+        return [None]                                        # 명령 안에서 바뀌는 변수 — 값을 알 수 없다
+    if "$" in t and not re.fullmatch(r"(\$\{?\w+\}?|\$\(\s*pwd\s*\)|`pwd`)[/*]*", t.strip("'\"")):
+        # 비어 있을 때의 값 — `${X:-/tmp}`·`${X-/tmp}` 는 기본값이 들어간다(빈 값이 아니다)
+        empty = shellparse.VAR_ANY.sub(
+            lambda m: (re.match(r"\$\{\w+:?-([^}$`]*)\}$", m.group(0)) or [None, ""])[1], t)
+        if empty:
+            out.append(empty)
+    out = [b for c in out for b in brace_expand(c)]
+    res = []
+    for c in out:
+        if c.startswith(("/", "~", "$")):
+            res.append(c)
+            continue
+        for here in HERE[0]:
+            res.append(None if here is None else (c if here == "." else _join(here, c)))
+    return res
+
+
+def track_cd(tokens: list) -> bool:
+    """`cd`·`pushd`·`popd` 면 HERE 를 갱신하고 True. 모르는 변수만 있는 인자는 비어 있을 수 있다(`cd` = 홈)."""
+    toks = unwrap(strip_env(tokens))
+    if not toks or toks[0] not in ("cd", "pushd", "popd"):
+        return False
+    args = [a for a in toks[1:] if not a.startswith("-") or a == "-"]
+    before = HERE[0]
+    if toks[0] == "popd" or (toks[0] == "pushd" and (not args or re.fullmatch(r"[+-]\d*", args[0]))):
+        new = [None]                                         # 스택에서 꺼낸 위치 — 알 수 없다
+    else:
+        d = args[0] if args else "~"
+        if d == "-" or "`" in d or "$(" in d or d.startswith(("~-", "~+")):
+            new = [None]
+        elif "$" in d:
+            new = [None] + (["~"] if not shellparse.VAR_ANY.sub("", d) else [])
+        elif d.startswith(("/", "~")):
+            new = [os.path.normpath(d) if d.startswith("/") else d]
+        else:
+            new = [None if h is None else (d if h == "." else _join(h, d)) for h in before]
+    # 교체가 아니라 합집합 — `( cd / )`·`{ cd /; } &`·`cd x || …` 는 현재 셸 위치를 바꿀 수도 안 바꿀 수도 있다.
+    # 가능한 위치를 넉넉히 잡으면 판정은 보수적이 될 뿐 틀리지 않는다.
+    HERE[0] = list(dict.fromkeys(before + new))
+    return True
 
 
 def git_sub_index(tokens: list) -> int:
@@ -367,7 +489,12 @@ def check(tokens: list):
         has_f = "--force" in flags or has_short_flag(flags, "f")
         if has_r:  # -f 유무와 무관 — `rm -r ~` 도 같은 결과다
             for t in targets:
-                if dangerous_root(t):
+                cands = rm_candidates(t)
+                if None in cands:
+                    return ("rm -r 의 실제 대상을 판정할 수 없다 — 명령 안에서 값이 바뀌는 변수가 들어 있거나, "
+                            "앞선 cd 의 목적지를 모른다(명령 치환·변수). "
+                            "다음 행동: 리터럴 절대 경로로 지정하라(예: rm -rf /abs/path/dist).")
+                if any(dangerous_root(c) for c in cands):
                     return "rm -r on system/home/cwd/parent/.git path 금지. 사용자 승인 필요."
         return None
 
@@ -457,6 +584,9 @@ def scan(command: str):
         reason = scan(body)
         if reason:
             return reason
+    # 같은 명령 맨 앞에서 확정된 변수만 bash 처럼 펼친다(shellparse) — `S=/tmp/x && rm -rf $S` 의 대상은 깊은
+    # 경로다. 재대입·조건부·명령 치환·값을 바꾸는 builtin 이 끼면 모르는 값으로 남아 계속 막힌다(fail closed).
+    command = shellparse.expand_command(command, shellparse.leading_assignments(command))
     # 따옴표 없는 `$(pwd)` 는 토크나이저가 `$`·`(`·`pwd`·`)` 로 쪼개 경로 판정을 피해 간다.
     command = re.sub(r"\$\(\s*pwd\s*\)|`\s*pwd\s*`", "$PWD", command)
     try:
@@ -466,16 +596,10 @@ def scan(command: str):
             return ("파싱 불가 명령에 파괴적 패턴 포함 — 안전을 위해 차단(사용자 승인 필요). "
                     "따옴표를 단순하게 하거나 커밋 메시지는 `-F <파일>` 로 넘겨라.")
         return None
-    known = {}
+    HERE[0], CMD[0] = ["."], command
     for sub in split_subcommands(tokens):
-        # 같은 명령 안에서 정의한 변수는 펼쳐서 본다 — `S=/tmp/x && rm -rf $S` 의 대상은 깊은 경로다.
-        # 모르는 변수(명령 치환 결과 등)는 그대로 두어 빈 값일 수 있는 경로로 계속 막는다(fail closed).
-        if all(ENV_PREFIX.match(t) for t in sub) or (sub[0] == "export" and len(sub) > 1
-                                                     and all(ENV_PREFIX.match(t) for t in sub[1:])):
-            for t in (sub[1:] if sub[0] == "export" else sub):
-                shellparse.record_assignment(t, known)
+        if track_cd(sub):
             continue
-        sub = [shellparse.expand_vars(t, known) for t in sub]
         # commit 승인 우회: 정확히 `CLAUDE_COMMIT_APPROVED=1 git commit ...` 만.
         if len(sub) >= 3 and sub[0] == "CLAUDE_COMMIT_APPROVED=1" and sub[1] == "git" and sub[2] == "commit":
             failed = verify_failed()
