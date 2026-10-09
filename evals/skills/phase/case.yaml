@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: skills-phase
+description: '/phase 가 planner 에 위임해 Story·acceptance 가 있는 phase 1 plan 을 만들고 structure-fitness-reviewer 로 자동 검증한다'
+tags: [skills, agents, capability]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 30
+  timeout_seconds: 900
+  allowed_tools: [Bash, Read, Write, Edit, Glob, Grep, Agent]

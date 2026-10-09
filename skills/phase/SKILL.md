@@ -14,11 +14,22 @@ argument-hint: <n> [slug] | <n> epic <seq> <slug> | <n> epic <seq> story <story-
 - **Epic**: `/phase <n> epic <seq> <slug>` → `docs/plans/phase-<n>-epic-<seq>-<slug>.md`. (~80줄 cap, 큰 흐름·Story 분할만). 상위 Phase plan 존재 전제.
 - **Story**: `/phase <n> epic <seq> story <story-seq> <slug>` → `...-story-<story-seq>-<slug>.md`. (1 PR 단위 세부 Acceptance + 수동 회귀). 상위 Epic plan 전제. **Single-Story Epic 도 분리 필수.**
 - 인자 비었으면 사용법 출력 후 종료.
+- **인자 해석 예** — 공백으로 나눈 첫 토큰이 숫자면 Phase 번호, 그다음 토큰이 slug 다. 아래 형태는 모두 유효하니 되묻지 않는다:
+
+  | 인자(`$ARGUMENTS`) | Tier | 대상 파일 |
+  |---|---|---|
+  | `0` · `0 domain` | Phase 0 | `docs/plans/phase-0-domain.md` |
+  | `1 notices` | Phase 1 | `docs/plans/phase-1-notices.md` |
+  | `1` (기존 `phase-1-*.md` 1개) | Phase 1 갱신 | 그 파일 |
+  | `2 epic 1 checkout` | Epic | `docs/plans/phase-2-epic-1-checkout.md` |
+  | `2 epic 1 story 3 coupon-apply` | Story | `docs/plans/phase-2-epic-1-story-3-coupon-apply.md` |
 
 ## 2. 인터뷰 게이트 (planner 스폰 **전** — 메인 세션이 수행)
 planner 는 서브에이전트라 사용자와 대화형 루프가 불가능하다(출력이 단일 메시지로 귀환). 인터뷰는 이 스킬을 실행하는 **메인 세션**이 한다:
 - 대상 범위에서 **열린 결정**(답에 따라 아키텍처·스키마·UX가 바뀌는 것 — 데이터 모델 형태·타입 인터페이스·UX 분기·권한 경계)을 식별. 없으면 생략하고 §3.
 - AskUserQuestion 으로 **한 번에 한 질문**, 아키텍처가 바뀔 질문 우선, **최대 5문항**. 각 질문에 후보 2~3개 + 트레이드오프 1줄.
+- **물을 수단이 없으면(AskUserQuestion 이 없거나 거부됨 — 헤드리스 `claude -p`·CI) 질문을 텍스트로 늘어놓고 턴을 끝내지 않는다.** 결정마다 권고안을 골라 Decision Register 에 `선택(가정)` 으로 적고 §3 으로 진행한다. 최종 요약에 "가정으로 정한 결정 N개 — 확인 필요" 를 목록으로 남긴다. plan 이 없는 상태로 멈추는 것보다 가정이 드러난 plan 이 리뷰하기 쉽다.
+- 프로젝트 문서(`phase-0-domain.md` 등)에 Decision Register 가 이미 있으면 그 표의 결정은 다시 묻지 않는다.
 - 답을 **Decision Register 초안**(`| 결정 | 선택 | 검토한 대안 | 사유 | 뒤집힐 조건 |`)으로 정리해 §3 planner 프롬프트에 포함.
 - update 모드는 보통 생략 가능. **Phase 0(greenfield)은 인터뷰 필수** — 최소 입력(배경·목표·디자인 방향)일수록 도메인 미지가 최대인 지점이 여기다. 도시에 §5(설계 갈림길)를 질문 재료로 쓰면 각 질문에 "레퍼런스 A는 X, B는 Y" 를 병기할 수 있어 오너가 도메인 비전문이어도 답할 수 있다. 미답 항목은 planner 가 가정 표에 기록.
 

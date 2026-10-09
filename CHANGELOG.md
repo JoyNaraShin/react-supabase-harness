@@ -2,6 +2,29 @@
 
 이전 버전의 변경 내역은 git 이력에 있다. 이 파일은 공개 이후부터 기록한다.
 
+## 0.35.0 — 측정 신뢰도와 커버리지
+
+첫 CI eval 이 로컬과 다른 결과를 냈다(과차단 의심 0.89, 리뷰어 0.33). 원인을 하나씩 열어 보니 하네스 결함보다 **측정 결함**이 많았다 — 그것부터 고쳤다.
+
+### 측정이 거짓말하지 않게
+- 실행기 아티팩트 분리 — eval 실행기가 슬래시 프롬프트를 스킬로 펼치지 않는 런(모델이 Skill 도구로 부르려다 `disable-model-invocation` 으로 거절됨)을 슬래시 케이스마다 `runner-skill-expanded` 채점기(`arm: with-only`, 점수 제외)가 잡고, `eval-report` 가 측정 실패로 빼고 개수를 보고한다.
+- `node_modules` 삭제 케이스 — "rm 으로 지웠나" 대신 "어떤 방법이든 지웠나 + 하네스 차단이 한 번도 없었나"로. 파일 채점기는 없는 파일에서 예외를 던져(실측) 삭제를 증명할 수 없다. 일반 패키지 추가 케이스에도 차단 부재 채점기.
+- 리뷰어 llm 채점기는 trace 대신 최종 리포트(`last_message`)를 본다 — 긴 trace 가 잘려 최종 리포트를 못 본 채 FAIL 하던 판정이 있었다.
+- `tests/test_eval_report.py` — 실행 실패·한도·실행기 아티팩트가 점수로 새지 않는지, 유효 런 없는 케이스가 게이트를 실패시키는지.
+
+### 커버리지
+- eval 21 → 27케이스: `fit-before-phase`·`no-pr-with-critical` 게이트(v0.34 신설, 첫 eval), `/branch`·`/phase`·`/prod-readiness`·`/review-structure`(고아 테이블). eval 이 있는 스킬 5 → 9/16 — 나머지는 네트워크(gh)·패키지 설치가 필요해 샌드박스 eval 로 잴 수 없다.
+- `test.yml` — 주 1회 정기 실행(모델 비용 없음)과 `claude plugin validate --strict` 잡.
+
+### 보정
+- `stability-reviewer` — 열 권한 등 DB 가 이미 집행하는 경로에 대한 이중화 제안은 결함이 아니라 권고(Minor 이하).
+- `/phase` — 인자 해석 예 표(`1 notices` → `phase-1-notices.md`): haiku 가 3/3 "사용법과 맞지 않는다"며 되물었다. 물을 수단이 없을 때(헤드리스 `claude -p`·CI)는 질문을 늘어놓고 멈추지 말고 권고안을 가정으로 적어 진행, 프로젝트 문서의 Decision Register 는 다시 묻지 않는다. haiku 는 이 대체 규칙을 1/3 만 따랐다(README).
+- `eval-report --latest` — (모델, 케이스)마다 최근 결과 파일만 집계.
+
+### 수치
+- haiku 3런 27케이스 pass^k 22/27, 평균 Δ +0.52. 새 게이트 둘(`fit-before-phase`·`no-pr-with-critical`)과 `/prod-readiness`·스냅샷 알림은 Δ +1.00·pass³.
+- 테스트 147 → 153(eval-report 계약 6).
+
 ## 0.34.1 — CI eval 이 실제로 돌게
 
 v0.34.0 의 첫 CI eval 실행에서 126런 전부가 모델 호출 전에 거부됐다("셸 도구를 가둘 샌드박스 백엔드가 없음"). 그런데 pass^k 표에는 파괴 명령 차단 케이스들이 1.00 으로 찍혔다 — 아무것도 실행되지 않아 "성공하지 않음" 채점이 저절로 참이 된 것이다.

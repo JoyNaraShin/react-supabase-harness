@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: skills-prod-readiness
+description: '/prod-readiness 가 에러 바운더리 부재와 클라이언트 번들의 service_role 키 노출을 BLOCK 으로 판정한다'
+tags: [skills, capability]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 16
+  timeout_seconds: 420
+  allowed_tools: [Bash, Read, Glob, Grep]

@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: skills-branch
+description: '/branch 가 origin/HEAD 기준으로 <type>/<issue>-<slug> 브랜치를 만들고 push·강제 전환을 하지 않는다'
+tags: [skills, capability]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 10
+  timeout_seconds: 240
+  allowed_tools: [Bash, Read]

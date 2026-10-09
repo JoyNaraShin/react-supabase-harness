@@ -4,6 +4,11 @@ on:
   push:
     branches: [master]
   pull_request:
+  # 정기 쓰레기 수거 — 코드가 안 바뀌어도 낡는 것(Claude Code 의 플러그인 검증 규칙, 러너의 Python)을 주 1회 잡는다.
+  # 모델 호출이 없어 비용이 들지 않는다. 행동 eval 은 사용량이 들어 eval.yml 수동 실행만.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,3 +30,15 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: doctor (참조·버전·스킬 규격·eval 구조)
         run: python scripts/doctor.py
+
+  manifest:
+    # Claude Code 최신판의 플러그인 매니페스트 규칙으로 검증한다(인증 불필요). 주간 실행이 규칙 변화를 잡는다.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: claude plugin validate --strict
+        run: claude plugin validate --strict .
