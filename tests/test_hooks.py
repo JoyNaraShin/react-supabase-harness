@@ -392,7 +392,12 @@ class DestructiveGitTest(unittest.TestCase):
                   "S=/; rm -rf $S{,/..}", "( cd / ) ; rm -rf build", "{ cd /; } & rm -rf build",
                   # 0.35.2 커밋 보안 리뷰 — 확장 상한에서 잘라 뒤를 안 봤고(fail-open), 펼친 `#` 이 주석이 됐다
                   "rm -rf /tmp/{a{1..200},..}/usr", "C=#; rm -rf $C /", "C=#; rm -rf x $C ~",
-                  "rm -rf /tmp/{/../}/..", "rm -rf /tmp/x/{1..9..4}/../../.."]:
+                  "rm -rf /tmp/{/../}/..", "rm -rf /tmp/x/{1..9..4}/../../..",
+                  # 0.35.3 리뷰 뒤 문자 단위 퍼즈 — bash 가 토큰을 나누기 전에 하는 변환을 파서가 몰랐다
+                  "r\\\nm -rf /", "rm \\\n-rf /usr", "rm -rf /us\\\nr",          # `\⏎` 는 지워진다(공백 아님)
+                  "rm -rf $'/'", "rm -rf $'\\x2f'", "rm -rf $'\\057usr'", 'rm -rf $"/"',  # ANSI-C 따옴표
+                  "S=/tmp/a/b/c; rm -rf /$$S", "rm -rf ${Susr: \\x2f,}/",       # `$$` · 공백 든 `${…}`
+                  "rm -rf /./usr", "rm -rf .//*", "rm -rf ~/./Projects"]:      # `.`·`//` 정규화
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
         for c in ["rm -rf dist/{a,b}", "rm -rf /tmp/{x,y}-cache", "rm -rf build/{1..3}"]:
@@ -845,7 +850,8 @@ class SecondReverifyRegressionTest(unittest.TestCase):
     def test_unparseable_command_still_blocks_destructive_patterns(self):
         # 파싱 실패 폴백이 부분문자열 목록이라 `git commit`·`push -f` 가 통과했다(fail-closed 주장 반증).
         # 승인 커밋 접두어 뒤에 붙인 명령도 폴백에서 검사해야 한다.
-        unparseable = "echo $'it\\'s'"
+        # `$'it\'s'` 는 0.35.4 부터 bash 처럼 풀려 파싱된다 — 진짜로 닫히지 않은 따옴표를 쓴다
+        unparseable = "echo 'unterminated"
         for c, want in [(f"{unparseable} && git commit -m x", True),
                         (f"{unparseable} && git push -f origin main", True),
                         ("CLAUDE_COMMIT_APPROVED=1 git commit -m \"a $'x\\'\" && git push --force", True),
@@ -1162,7 +1168,9 @@ class ThirdReviewSelfProtectionTest(unittest.TestCase):
                   "C=#; echo x $C | tee .claude/state/plan-gate-off",
                   "echo x | tee .claude/sta{te,x}/plan-gate-off",
                   "touch .claude/state/plan-gate-o{ff,n}",
-                  "touch .claude/x{1..300}/y"]:                # 확장이 너무 크면 모르는 대상 — 막는다
+                  "touch .claude/x{1..300}/y",                 # 확장이 너무 크면 모르는 대상 — 막는다
+                  "echo x | t\\\nee .claude/state/plan-gate-off",
+                  "touch $'.claude/state/plan-gate-off'", "touch $'\\x2eclaude'/state/plan-gate-off"]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.bash(c)))
 

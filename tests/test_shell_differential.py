@@ -46,7 +46,7 @@ RM_USES = ["rm -rf $S", "rm -rf ${S}", 'rm -rf "$S"', "rm -rf $S/", "rm -rf $S/.
            "rm -rf ../work", "rm -rf $S/../work", 'rm -rf "${X:-/tmp/hx}"/x']
 
 RECORDER = r'''
-__rec() { local a; for a in "$@"; do case "$a" in -*) ;; *) printf '%s\t%s\n' "$PWD" "$a" >> "$__OUT";; esac; done; }
+__rec() { local a; for a in "$@"; do case "$a" in -*) ;; *) printf '%s\t%s\0' "$PWD" "$a" >> "$__OUT";; esac; done; }
 rm() { __rec "$@"; }
 touch() { __rec "$@"; }
 '''
@@ -61,8 +61,10 @@ def real_args(cmd: str, cwd: str, home: str) -> list:
     subprocess.run([BASH, "-c", RECORDER + cmd + "\nwait"], cwd=cwd, env=env, capture_output=True, timeout=10)
     res = []
     if os.path.exists(out):
-        with open(out, encoding="utf-8") as f:
-            for ln in f.read().splitlines():
+        with open(out, encoding="utf-8", errors="surrogateescape") as f:
+            for ln in f.read().split("\0"):                  # 인자에 줄바꿈이 들어갈 수 있다(`$'\n'`) — NUL 로 나눈다
+                if not ln:
+                    continue
                 pwd, a = ln.split("\t", 1)
                 # POSIX rm 은 마지막 요소가 `.`·`..` 인 대상을 거부하고 아무것도 하지 않는다 — 실제 삭제 대상이 아니다
                 if not a or os.path.basename(a.rstrip("/") or "/") in (".", ".."):
@@ -164,6 +166,33 @@ class ShellDifferentialTest(unittest.TestCase):
         self.maxDiff = None
         self.assertGreater(checked, 50)
         self.assertEqual(misses[:8], [], f"생성 명령 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
+
+    def test_character_level_shell_syntax_never_hides_a_dangerous_target(self):
+        """문법 요소가 아니라 **문자** 단위로 섞는다 — `\\⏎`(이어쓰기)·`$'…'`·이스케이프·중괄호 조각처럼 토큰 경계를
+        바꾸는 문자는 문법 단위 생성기가 만들지 못했다(0.35.3 커밋 보안 리뷰 뒤 이 퍼즈가 `r\\⏎m -rf /`·
+        `rm -rf $'/'` 를 찾음 — 둘 다 0.35 이전부터 있던 구멍)."""
+        import random
+        rnd = random.Random(int(os.environ.get("HARNESS_FUZZ_SEED", "20261009")))
+        n = int(os.environ.get("HARNESS_FUZZ_N", "2500"))
+        atoms = ["$S", "${S}", "$T", "/", "..", "/..", "{", ",", "}", "\\", "\\\n", "'", '"', "$", "#", "~", "+",
+                 "-", "a", "*", " ", "$'", '$"', "\\x2f", "\\057", "\\,", "\\{", "=", ":", "@", "$$", "${S",
+                 "${S:-/}", "{,", ",}", "{/../}", "...", "usr"]
+        vals = ["/tmp/hx/a/b", "/tmp/hx/a", "/", ".", "..", "a,b", "#", "x", "-", "+", "/tmp/hx/a/b/c/d"]
+        lead = ["S={v}; ", "S={v} && ", "export S={v}\n", "S={v}; T=$S/..; ", ""]
+        heads = ["rm -rf ", "rm -r -f ", "\\rm -rf ", "r\\\nm -rf ", "rm \\\n-rf ", "command rm -rf ", "/bin/rm -rf "]
+        misses, checked = [], 0
+        for _ in range(n):
+            body = "".join(rnd.choice(atoms) for _ in range(rnd.randint(1, 7)))
+            cmd = rnd.choice(lead).replace("{v}", rnd.choice(vals)) + rnd.choice(heads) + body
+            if self.bdg.scan(cmd):
+                continue
+            checked += 1
+            bad = [a for a in real_args(cmd, self.cwd, self.home) if is_dangerous(a, self.cwd, self.home)]
+            if bad:
+                misses.append((cmd, bad))
+        self.maxDiff = None
+        self.assertGreater(checked, 50)
+        self.assertEqual(misses[:8], [], f"문자 단위 생성 명령 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
 
     def test_known_safe_forms_still_pass(self):
         # 정밀도: 오늘 실사용에서 막혀 고친 형태는 계속 통과해야 한다(과차단 회귀 방지)

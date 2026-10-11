@@ -639,7 +639,8 @@ DISABLE_PLUGIN = re.compile(
 
 
 def _segments(cmd: str) -> list:
-    flat = shellparse.prep(_unescape(cmd))              # heredoc 데이터·따옴표 속 메타문자 제거, 주석 제거
+    # bash 가 토큰을 나누기 전에 하는 변환(`\⏎` 제거·`$'…'` 풀기)을 먼저 — `t\⏎ee <보호 파일>` 이 숨었다
+    flat = shellparse.prep(_unescape(shellparse.canonical(cmd)))   # heredoc 데이터·따옴표 속 메타문자 제거, 주석 제거
     flat = re.sub(r"/+", "/", flat.replace("/./", "/"))
     flat = re.sub(r"~(?=/)|\$\{?HOME\}?(?=/)", os.path.expanduser("~"), flat)
     return [s.strip() for s in re.split(r"[;&|\n]+", flat) if s.strip()]

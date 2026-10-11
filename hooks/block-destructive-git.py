@@ -268,6 +268,12 @@ def dangerous_root(t: str) -> bool:
             if not t.startswith("/") and (n == "." or n == ".." or n.startswith("../")):
                 return True
             t = n
+    # `.`·`//` 도 정규화한다 — `/./x`·`~/./Projects`·`.//*` 가 깊이 판정을 속였다(문자 퍼즈가 찾음)
+    if not t.startswith("$"):
+        if t.startswith("~/"):
+            t = "~/" + os.path.normpath(t[2:]) if os.path.normpath(t[2:]) != "." else "~"
+        elif not t.startswith("~"):
+            t = os.path.normpath(t) if t else t
     t = t.rstrip("/") or "/"
     if t in (".", "..", "*", "./*", ".git", "./.git", "~", "~/*", "$HOME", "${HOME}",
              "$HOME/*", "${HOME}/*") or re.fullmatch(r"(\.\./)*\.\.(/\*)?", t):
@@ -543,6 +549,7 @@ def scan(command: str):
     """Tokenize a command string and check each sub-command. Fail closed on error."""
     if not command:
         return None
+    command = shellparse.canonical(command)                # `\⏎` 제거 · `$'\x2f'` 풀기 · 복잡한 `${…}` 접기
     command, scripts = split_heredocs(command)
     scripts = scripts + embedded_scripts(command)
     for body in scripts:

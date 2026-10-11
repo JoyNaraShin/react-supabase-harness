@@ -211,6 +211,10 @@ def _expand_line(line: str, known: dict) -> str:
         if ch == '"':
             dq = not dq
         elif ch == "$":
+            if i + 1 < n and line[i + 1] in "$!#?@*-0123456789":
+                out.append(line[i:i + 2])                    # `$$S` 는 PID 뒤 글자 S 다 — `$S` 가 아니다
+                i += 2
+                continue
             m = _VAR_REF.match(line, i)
             if m and (m.group(1) or m.group(2)) in known:
                 out.append(known[m.group(1) or m.group(2)])
@@ -221,10 +225,158 @@ def _expand_line(line: str, known: dict) -> str:
     return "".join(out)
 
 
+_CONT = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
+
+
+def join_continuations(cmd: str) -> str:
+    """`\\`+줄바꿈을 **지운다** — bash 는 토큰을 나누기 전에 이 둘을 없애 앞뒤를 붙인다(`r\\⏎m -rf /` 는 `rm`).
+    공백으로 바꾸면 명령 이름·대상이 둘로 갈라져 파서에게서 숨는다(0.35.3 커밋 보안 리뷰 후 문자 퍼즈가 찾음,
+    0.35 이전부터 있던 구멍). 작은따옴표 안에서는 bash 도 지우지 않지만, 그 문자열이 `bash -c` 로 다시
+    해석되면 지워지므로 어디서든 지운다 — 판정은 보수적이 될 뿐이다. 짝수 개 `\\` 뒤 줄바꿈은 진짜 줄바꿈이다."""
+    return _CONT.sub(r"\1", cmd)
+
+
+_ANSI_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+                "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def _ansi_c(body: str) -> str:
+    """`$'…'` 본문을 bash 처럼 푼다 — `\\x2f`·`\\057`·`\\u002f` 도 `/` 다."""
+    out, i, n = [], 0, len(body)
+    while i < n:
+        c = body[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        e = body[i + 1]
+        if e in _ANSI_SIMPLE:
+            out.append(_ANSI_SIMPLE[e])
+            i += 2
+        elif e in "01234567":
+            m = re.match(r"[0-7]{1,3}", body[i + 1:])
+            out.append(chr(int(m.group(0), 8) & 0xFF))
+            i += 1 + len(m.group(0))
+        elif e in "xuU":
+            m = re.match(r"[0-9a-fA-F]{1,%d}" % {"x": 2, "u": 4, "U": 8}[e], body[i + 2:])
+            if m:
+                out.append(chr(min(int(m.group(0), 16), 0x10FFFF)))
+                i += 2 + len(m.group(0))
+            else:
+                out.append("\\" + e)
+                i += 2
+        elif e == "c" and i + 2 < n:
+            out.append(chr(ord(body[i + 2]) & 0x1F))
+            i += 3
+        else:
+            out.append("\\" + e)
+            i += 2
+    return "".join(out)
+
+
+def decode_ansi_quotes(cmd: str) -> str:
+    """따옴표 밖의 `$'…'` 를 푼 값의 작은따옴표 문자열로, `$"…"` 를 `"…"` 로 바꾼다. 파서는 `$'/'` 를 변수
+    `$/` 처럼 읽어 대상 `/` 를 놓쳤다(0.35 이전부터 — 문자 퍼즈가 찾음). 확인용 사본에만 적용된다."""
+    out, i, n, q = [], 0, len(cmd), None
+    while i < n:
+        c = cmd[i]
+        if q:
+            out.append(c)
+            if c == "\\" and q == '"' and i + 1 < n:
+                out.append(cmd[i + 1])
+                i += 2
+                continue
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if c == "$" and i + 1 < n and cmd[i + 1] == "'":
+            j = i + 2
+            while j < n and cmd[j] != "'":
+                j += 2 if cmd[j] == "\\" else 1
+            val = _ansi_c(cmd[i + 2:min(j, n)])
+            out.append("'" + val.replace("'", "'\\''") + "'")
+            i = j + 1
+            continue
+        if c == "$" and i + 1 < n and cmd[i + 1] == '"':
+            i += 1                                           # `$"…"` 은 번역용 — 뜻은 `"…"` 와 같다
+            continue
+        if c in "'\"":
+            q = c
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+_SIMPLE_PARAM = re.compile(r"[A-Za-z_]\w*(?::?[-=?+][\w./:@%+=~-]*)?")
+UNKNOWN_PARAM = "${__harness_unknown__}"
+
+
+def collapse_params(cmd: str) -> str:
+    """단순하지 않은 `${…}`(이름·`이름:-리터럴` 이 아닌 것)를 '모르는 변수' 하나로 접는다. bash 는 `${X: \\x2f,}`
+    처럼 공백·연산자가 든 매개변수 확장도 한 단어로 다루는데, 토크나이저는 공백에서 쪼개 대상을 놓쳤다
+    (문자 퍼즈가 찾음). 모르는 변수는 빈 값일 수 있는 것으로 판정된다 — 보수적."""
+    out, i, n, q = [], 0, len(cmd), None
+    while i < n:
+        c = cmd[i]
+        if q == "'":
+            out.append(c)
+            q = None if c == "'" else q
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and q is None:
+            q = "'"
+        elif c == '"':
+            q = None if q == '"' else '"'
+        elif cmd.startswith("${", i):
+            depth, j = 0, i + 1
+            while j < n:
+                if cmd[j] == "\\":
+                    j += 2
+                    continue
+                depth += cmd[j] == "{"
+                depth -= cmd[j] == "}"
+                if depth == 0:
+                    break
+                j += 1
+            body = cmd[i + 2:j]
+            if j >= n or not _SIMPLE_PARAM.fullmatch(body):
+                # 값을 바꾸는 꼴(`${S:=…}`·`${S=…}`)과 간접 참조(`${!r}`)는 접어도 `_BAIL` 이 보도록 표식을 남긴다
+                m = re.match(r"(!?)([A-Za-z_]\w*)(:?=)?", body)
+                if m and m.group(1):
+                    out.append("${!__harness_unknown__}")
+                elif m and m.group(3):
+                    out.append("${" + m.group(2) + ":=__harness_unknown__}")
+                else:
+                    out.append(UNKNOWN_PARAM)
+                i = j + 1
+                continue
+            out.append(cmd[i:j + 1])
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def canonical(cmd: str) -> str:
+    """판정용 사본 — bash 가 토큰을 나누기 전에 하는 변환을 먼저 한다: 이어쓰기 제거, `$'…'` 풀기, 복잡한 `${…}` 접기."""
+    return collapse_params(decode_ansi_quotes(join_continuations(cmd)))
+
+
 def segments(cmd: str, cwd: str, shell_only: bool = False) -> list:
     """(하위 명령, 그 시점의 cwd) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다.
     확정된 변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다."""
     out, here = [], cwd
+    cmd = canonical(cmd)
     cmd = expand_command(cmd, leading_assignments(cmd))
     for seg in re.split(r"[;&|\n]+", prep(cmd, shell_only).replace("(", " ").replace(")", " ")):
         seg = seg.strip()
