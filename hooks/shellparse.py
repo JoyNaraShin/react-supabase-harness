@@ -42,8 +42,7 @@ def strip_heredoc_bodies(cmd: str, shell_only: bool = False) -> str:
         if (_FEEDS_POSIX_SHELL if shell_only else _FEEDS_SHELL).search(line):
             out += body                                    # 셸·인터프리터가 읽는 본문은 실행된다
         if i < len(lines):
-            out.append(lines[i])
-            i += 1
+            i += 1                                         # 종료 줄(`EOF`)은 명령이 아니다 — 정정 게이트가 `pyeof` 로 셌다
     return "\n".join(out)
 
 
@@ -77,6 +76,9 @@ def neutralize_quotes(cmd: str) -> str:
 def prep(cmd: str, shell_only: bool = False) -> str:
     text = neutralize_quotes(strip_heredoc_bodies(cmd, shell_only))
     text = re.sub(r"(^|\s)#[^\n]*", r"\1", text)          # 주석은 실행되지 않는다
+    # fd 복제(`2>&1`·`>&-`)와 `&>`·`|&` 의 `&` 는 명령 구분자가 아니다 — `1` 이 명령으로 세어졌다
+    text = re.sub(r"\d*[<>]&(?:\d+|-)", " ", text)
+    text = re.sub(r"&>>?", ">", text).replace("|&", "|")
     return text
 
 

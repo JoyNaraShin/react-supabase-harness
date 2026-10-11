@@ -631,6 +631,10 @@ class ReportFailuresTest(unittest.TestCase):
         body = mod.cmd_shapes("Bash", {"command": "python3 - <<'EOF'\nimport json\nprint(json.dumps(1))\nEOF"})
         self.assertFalse([x for x in body if x.startswith(("import", "print"))], body)
         self.assertIn("rm -fr x", mod.cmd_shapes("Bash", {"command": "bash <<'EOF'\nrm -rf x\nEOF"}))
+        # 2026-10-11 실사용(0.35.4): heredoc 종료 줄 `PYEOF` 와 `2>&1` 의 `1` 이 명령으로 세어졌다
+        shapes = mod.cmd_shapes("Bash", {"command": "python3 - <<'PYEOF'\nprint(1)\nPYEOF\nls -d x 2>&1; ls y >&2 |& cat &> z"})
+        self.assertFalse([x for x in shapes if x in ("pyeof", "1", "2") or x.startswith(">")], shapes)
+        self.assertIn("ls y", shapes)
 
     def test_done_keyword_does_not_count_as_a_reversal(self):
         loop = 'for d in a b; do rm -rf "$d"; done'
