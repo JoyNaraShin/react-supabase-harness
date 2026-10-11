@@ -37,6 +37,11 @@ def real_rm() -> str:
     return "/bin/rm"
 
 
+# 재귀가 아닌 것이 확실한 rm 긴 옵션(GNU coreutils rm --help 기준). 축약형은 재귀일 수 있어 여기 없다.
+_KNOWN_LONG = {"force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "dir", "verbose",
+               "help", "version"}
+
+
 def parse(args: list):
     """(재귀 여부, 대상 목록). `--` 뒤는 모두 대상이다."""
     recursive, targets, opts = False, [], True
@@ -44,7 +49,10 @@ def parse(args: list):
         if opts and a == "--":
             opts = False
         elif opts and a.startswith("--"):
-            recursive |= a == "--recursive"
+            # GNU getopt 는 모호하지 않은 긴 옵션 축약(`--recursive` 의 앞부분)을 받아들인다. 래퍼가 모르는 긴 옵션은
+            # 재귀로 간주해 대상을 검사한다(fail-closed) — 판정이 실제 rm 의 해석보다 느슨해지지 않게.
+            name = a[2:].split("=", 1)[0]
+            recursive |= not name or "recursive".startswith(name) or name not in _KNOWN_LONG
         elif opts and a.startswith("-") and a != "-":
             recursive |= "r" in a[1:] or "R" in a[1:]
         else:

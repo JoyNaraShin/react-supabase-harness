@@ -1710,3 +1710,9 @@ class RuntimeRmGuardInstallTest(unittest.TestCase):
             self.assertIn("다음 행동", p.stderr)
             ok = subprocess.run(["bash", "-c", "rm -rf build/out"], capture_output=True, text=True, env=env, cwd=home)
             self.assertEqual(ok.returncode, 0, ok.stderr)
+            # 0.36.0 커밋 보안 리뷰: 긴 옵션 축약(`--rec`)·모르는 긴 옵션도 재귀로 보고 대상을 검사한다
+            for flags in ("--recursive", "--rec", "--r", "--force --recurs", "--unknown-opt"):
+                with self.subTest(flags=flags):
+                    p = subprocess.run(["bash", "-c", f'X=; rm {flags} "$X"/'], capture_output=True, text=True,
+                                       env=env, cwd=home)
+                    self.assertEqual(p.returncode, 1, p.stderr)
