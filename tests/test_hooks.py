@@ -1676,3 +1676,37 @@ class FourthReviewRegressionTest(unittest.TestCase):
         self.assertTrue(denied(agent("other-plugin:explore", "find it")))
         self.assertIsNone(agent("react-supabase-harness:verifier", "run"))
         self.assertIsNone(agent("general-purpose", "research and save to /tmp/r/report-ledger.md"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.36.0 실행 시점 rm 가드 — SessionStart 가 bin/rm 을 PATH 앞에 둔다(CLAUDE_ENV_FILE)
+# ─────────────────────────────────────────────────────────────────────────────
+class RuntimeRmGuardInstallTest(unittest.TestCase):
+    def test_session_start_puts_the_wrapper_first_on_path_once(self):
+        with tempfile.TemporaryDirectory() as d:
+            env_file = os.path.join(d, "env")
+            proj = os.path.join(d, "proj")
+            os.makedirs(proj)
+            for _ in range(2):                                   # 재개·압축으로 다시 불려도 한 번만
+                self.assertIsNone(run_hook("install-rm-guard.py", {"cwd": proj}, env={"CLAUDE_ENV_FILE": env_file}))
+            text = open(env_file).read()
+            self.assertEqual(text.count("export PATH="), 1, text)
+            self.assertIn(os.path.join(str(ROOT), "bin"), text)
+            self.assertIn("HARNESS_PROJECT_DIR=" + os.path.realpath(proj), text)
+            # 실제 bash 에서 적용되는가 — env 파일을 앞에 실행한 뒤 rm 이 래퍼로 풀린다
+            out = subprocess.run(["bash", "-c", f". {env_file}; command -v rm"], capture_output=True, text=True).stdout
+            self.assertEqual(out.strip(), os.path.join(str(ROOT), "bin", "rm"))
+
+    def test_session_start_without_env_file_is_a_no_op(self):
+        self.assertIsNone(run_hook("install-rm-guard.py", {"cwd": "/tmp"}))
+
+    def test_wrapper_blocks_and_explains(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            env = {"PATH": str(ROOT / "bin") + ":/usr/bin:/bin", "HOME": home,
+                   "HARNESS_REAL_RM": "/usr/bin/true", "HARNESS_PROJECT_DIR": home}
+            p = subprocess.run(["bash", "-c", 'X=; rm -rf "$X"/'], capture_output=True, text=True, env=env, cwd=home)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("다음 행동", p.stderr)
+            ok = subprocess.run(["bash", "-c", "rm -rf build/out"], capture_output=True, text=True, env=env, cwd=home)
+            self.assertEqual(ok.returncode, 0, ok.stderr)

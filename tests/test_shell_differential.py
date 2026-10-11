@@ -52,13 +52,31 @@ touch() { __rec "$@"; }
 '''
 
 
-def real_args(cmd: str, cwd: str, home: str) -> list:
-    """bash 가 실제로 rm/touch 에 넘긴 인자 — (그때의 PWD, 인자) 를 절대 경로로."""
+WRAPPER_DIR = str(ROOT / "bin")
+# 실행 시점 가드(bin/rm)가 통과시킨 뒤 실제로 지웠을 인자를 기록한다 — 진짜 rm 자리에 끼운다(HARNESS_REAL_RM)
+REAL_RM_RECORDER = """#!/bin/sh
+o=1
+for a in "$@"; do
+  if [ "$o" = 1 ] && [ "$a" = "--" ]; then o=0; continue; fi
+  if [ "$o" = 1 ]; then case "$a" in -?*) continue;; esac; fi
+  printf '%s\\t%s\\0' "$PWD" "$a" >> "$__OUT"
+done
+"""
+
+
+def real_args(cmd: str, cwd: str, home: str, wrapper: str = "") -> list:
+    """bash 가 실제로 rm/touch 에 넘긴 인자 — (그때의 PWD, 인자) 를 절대 경로로.
+    wrapper=<기록기 경로> 면 rm 을 함수로 바꾸지 않고 PATH 앞의 bin/rm(실행 시점 가드)을 지나게 한다 —
+    그때 기록되는 것은 가드가 **통과시켜** 진짜 rm 에 넘어간 인자다."""
     out = os.path.join(home, "out.tsv")
     if os.path.exists(out):
         os.unlink(out)
     env = {"PATH": "/usr/bin:/bin", "HOME": home, "__OUT": out}
-    subprocess.run([BASH, "-c", RECORDER + cmd + "\nwait"], cwd=cwd, env=env, capture_output=True, timeout=10)
+    script = RECORDER + cmd
+    if wrapper:
+        env.update(PATH=WRAPPER_DIR + ":/usr/bin:/bin", HARNESS_REAL_RM=wrapper, HARNESS_PROJECT_DIR=cwd)
+        script = RECORDER.replace("rm() { __rec \"$@\"; }\n", "") + cmd
+    subprocess.run([BASH, "-c", script + "\nwait"], cwd=cwd, env=env, capture_output=True, timeout=10)
     res = []
     if os.path.exists(out):
         with open(out, encoding="utf-8", errors="surrogateescape") as f:
@@ -85,6 +103,54 @@ def is_dangerous(path: str, cwd: str, home: str) -> bool:
     return False
 
 
+
+def gen_grammar(rnd) -> str:
+    """문법 요소를 무작위로 조합한 rm 명령 — 사람이 떠올린 목록 밖을 덮기 위해.
+    (독립 적대 리뷰가 후보 생성 단계에서 중단돼 대신 기계 생성으로 넓혔다, 2026-10-09)"""
+    vals = ["/tmp/hx/a/b", "/tmp/hx/a/b/../../..", ".", "..", "x/..", "/", "build", "a b", "/tmp/hx/*",
+            "#", "x#", "a,b", "/tmp/hx/a,..", "-", "=/"]                 # 펼친 뒤 다시 읽으면 뜻이 바뀌는 값
+    q = [lambda v: v, lambda v: f"'{v}'", lambda v: f'"{v}"', lambda v: f"$'{v}'"]
+    stmts = [
+        lambda: f"S={rnd.choice(q)(rnd.choice(vals))}", lambda: f"export S={rnd.choice(vals)}",
+        lambda: f"A=({rnd.choice(vals)} {rnd.choice(vals)})", lambda: f"A[0]={rnd.choice(vals)}",
+        lambda: "cd " + rnd.choice(["/", "..", "~", "-", "", "$S", '"$S"', "/tmp", "../.."]),
+        lambda: "pushd " + rnd.choice(["/", "..", "/tmp"]) + " >/dev/null", lambda: "popd >/dev/null",
+        lambda: "f(){ " + rnd.choice(["S=/", "cd /", "rm -rf $S"]) + "; }", lambda: "f",
+        lambda: "(( i = 1 ))", lambda: "set -- " + rnd.choice(vals), lambda: "shift",
+        lambda: "S=$(echo " + rnd.choice(vals) + ")", lambda: "S=`echo /`", lambda: "T=$S",
+        lambda: "S=${S%/*}", lambda: "S=${S#*/}", lambda: "S=${S/b/..}", lambda: "true", lambda: ":",
+        lambda: "{ " + rnd.choice(["S=/", "cd /", "true"]) + "; }", lambda: "( " + rnd.choice(["S=/", "cd /"]) + " )",
+    ]
+    targets = ["$S", '"$S"', "${S}", "$S/", "$S/..", "$S/*", "${A[0]}", '"${A[@]}"', "$1", '"$@"', "$T",
+               "${S%/*}", "${S#/}", "$S{,/..}", "~", "~+", "~-", "$PWD", "$OLDPWD", "*", "./*", "../*",
+               "work", "../work", "$S/../work", "${S:-/}", "${S:+/}", "\\\n$S",
+               "$S ~", "x $S /", "{$S}/..", "/tmp/hx/{$S}/../..", "/tmp/hx/{a{1..300},..}/..",
+               "/tmp/hx/{/../}/..", "/tmp/hx/a/{1..9..4}/../../..", "/tmp/hx/{a..c}/../..", "{,$S}"]
+    joins = ["; ", " && ", "\n", " || ", " | ", " & "]
+    parts = [rnd.choice(stmts)() for _ in range(rnd.randint(1, 4))]
+    return "".join(p + rnd.choice(joins) for p in parts) + rnd.choice(["rm -rf ", "rm -r -f ", "\\rm -rf "]) \
+        + rnd.choice(targets).replace("\\\\\\n", "\\\n")
+
+
+def gen_chars(rnd, heads=None) -> str:
+    """문법 요소가 아니라 **문자** 단위로 섞는다 — `\\⏎`(이어쓰기)·`$'…'`·이스케이프·중괄호 조각처럼 토큰 경계를
+    바꾸는 문자는 문법 단위 생성기가 만들지 못했다(0.35.3 커밋 보안 리뷰 뒤 이 퍼즈가 `r\\⏎m -rf /`·
+    `rm -rf $'/'` 를 찾음 — 둘 다 0.35 이전부터 있던 구멍)."""
+    atoms = ["$S", "${S}", "$T", "/", "..", "/..", "{", ",", "}", "\\", "\\\n", "'", '"', "$", "#", "~", "+",
+             "-", "a", "*", " ", "$'", '$"', "\\x2f", "\\057", "\\,", "\\{", "=", ":", "@", "$$", "${S",
+             "${S:-/}", "{,", ",}", "{/../}", "...", "usr"]
+    vals = ["/tmp/hx/a/b", "/tmp/hx/a", "/", ".", "..", "a,b", "#", "x", "-", "+", "/tmp/hx/a/b/c/d"]
+    lead = ["S={v}; ", "S={v} && ", "export S={v}\n", "S={v}; T=$S/..; ", ""]
+    heads = heads or ["rm -rf ", "rm -r -f ", "\\rm -rf ", "r\\\nm -rf ", "rm \\\n-rf ", "command rm -rf ", "/bin/rm -rf "]
+    body = "".join(rnd.choice(atoms) for _ in range(rnd.randint(1, 7)))
+    return rnd.choice(lead).replace("{v}", rnd.choice(vals)) + rnd.choice(heads) + body
+
+
+def fuzz_rng():
+    import random
+    return random.Random(int(os.environ.get("HARNESS_FUZZ_SEED", "20261009"))), int(os.environ.get("HARNESS_FUZZ_N", "2500"))
+
+
 def load(name):
     import importlib.util
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HOOKS / name)
@@ -102,6 +168,10 @@ class ShellDifferentialTest(unittest.TestCase):
         cls.cwd = os.path.join(cls.home, "proj", "work")      # cwd 가 홈 3단계 아래 — 조상 삭제를 잴 수 있게
         os.makedirs(cls.cwd)
         cls.bdg = load("block-destructive-git.py")
+        cls.recorder = os.path.join(cls.tmp, "real-rm-recorder.sh")
+        with open(cls.recorder, "w") as f:
+            f.write(REAL_RM_RECORDER)
+        os.chmod(cls.recorder, 0o755)
 
     @classmethod
     def tearDownClass(cls):
@@ -126,37 +196,11 @@ class ShellDifferentialTest(unittest.TestCase):
         self.maxDiff = None
         self.assertEqual(misses[:8], [], f"가드가 통과시켰는데 실제 대상이 위험한 명령 {len(misses)}개")
 
-    def test_generated_shell_syntax_never_hides_a_dangerous_target(self):
-        """문법 요소를 무작위로 조합한 명령(고정 시드)으로 같은 성질을 본다 — 사람이 떠올린 목록 밖을 덮기 위해.
-        (독립 적대 리뷰가 후보 생성 단계에서 중단돼 대신 기계 생성으로 넓혔다, 2026-10-09)"""
-        import random
-        rnd = random.Random(int(os.environ.get("HARNESS_FUZZ_SEED", "20261009")))
-        n = int(os.environ.get("HARNESS_FUZZ_N", "2500"))
-        vals = ["/tmp/hx/a/b", "/tmp/hx/a/b/../../..", ".", "..", "x/..", "/", "build", "a b", "/tmp/hx/*",
-                "#", "x#", "a,b", "/tmp/hx/a,..", "-", "=/"]                 # 펼친 뒤 다시 읽으면 뜻이 바뀌는 값
-        q = [lambda v: v, lambda v: f"'{v}'", lambda v: f'"{v}"', lambda v: f"$'{v}'"]
-        stmts = [
-            lambda: f"S={rnd.choice(q)(rnd.choice(vals))}", lambda: f"export S={rnd.choice(vals)}",
-            lambda: f"A=({rnd.choice(vals)} {rnd.choice(vals)})", lambda: f"A[0]={rnd.choice(vals)}",
-            lambda: "cd " + rnd.choice(["/", "..", "~", "-", "", "$S", '"$S"', "/tmp", "../.."]),
-            lambda: "pushd " + rnd.choice(["/", "..", "/tmp"]) + " >/dev/null", lambda: "popd >/dev/null",
-            lambda: "f(){ " + rnd.choice(["S=/", "cd /", "rm -rf $S"]) + "; }", lambda: "f",
-            lambda: "(( i = 1 ))", lambda: "set -- " + rnd.choice(vals), lambda: "shift",
-            lambda: "S=$(echo " + rnd.choice(vals) + ")", lambda: "S=`echo /`", lambda: "T=$S",
-            lambda: "S=${S%/*}", lambda: "S=${S#*/}", lambda: "S=${S/b/..}", lambda: "true", lambda: ":",
-            lambda: "{ " + rnd.choice(["S=/", "cd /", "true"]) + "; }", lambda: "( " + rnd.choice(["S=/", "cd /"]) + " )",
-        ]
-        targets = ["$S", '"$S"', "${S}", "$S/", "$S/..", "$S/*", "${A[0]}", '"${A[@]}"', "$1", '"$@"', "$T",
-                   "${S%/*}", "${S#/}", "$S{,/..}", "~", "~+", "~-", "$PWD", "$OLDPWD", "*", "./*", "../*",
-                   "work", "../work", "$S/../work", "${S:-/}", "${S:+/}", "\\\n$S",
-                   "$S ~", "x $S /", "{$S}/..", "/tmp/hx/{$S}/../..", "/tmp/hx/{a{1..300},..}/..",
-                   "/tmp/hx/{/../}/..", "/tmp/hx/a/{1..9..4}/../../..", "/tmp/hx/{a..c}/../..", "{,$S}"]
-        joins = ["; ", " && ", "\n", " || ", " | ", " & "]
+    def _fuzz(self, gen, label):
+        rnd, n = fuzz_rng()
         misses, checked = [], 0
         for _ in range(n):
-            parts = [rnd.choice(stmts)() for _ in range(rnd.randint(1, 4))]
-            cmd = "".join(p + rnd.choice(joins) for p in parts) + rnd.choice(["rm -rf ", "rm -r -f ", "\\rm -rf "]) \
-                + rnd.choice(targets).replace("\\\\\\n", "\\\n")
+            cmd = gen(rnd)
             if self.bdg.scan(cmd):
                 continue
             checked += 1
@@ -165,34 +209,51 @@ class ShellDifferentialTest(unittest.TestCase):
                 misses.append((cmd, bad))
         self.maxDiff = None
         self.assertGreater(checked, 50)
-        self.assertEqual(misses[:8], [], f"생성 명령 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
+        self.assertEqual(misses[:8], [], f"{label} 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
+
+    def test_generated_shell_syntax_never_hides_a_dangerous_target(self):
+        self._fuzz(gen_grammar, "문법 단위 생성 명령")
 
     def test_character_level_shell_syntax_never_hides_a_dangerous_target(self):
-        """문법 요소가 아니라 **문자** 단위로 섞는다 — `\\⏎`(이어쓰기)·`$'…'`·이스케이프·중괄호 조각처럼 토큰 경계를
-        바꾸는 문자는 문법 단위 생성기가 만들지 못했다(0.35.3 커밋 보안 리뷰 뒤 이 퍼즈가 `r\\⏎m -rf /`·
-        `rm -rf $'/'` 를 찾음 — 둘 다 0.35 이전부터 있던 구멍)."""
-        import random
-        rnd = random.Random(int(os.environ.get("HARNESS_FUZZ_SEED", "20261009")))
-        n = int(os.environ.get("HARNESS_FUZZ_N", "2500"))
-        atoms = ["$S", "${S}", "$T", "/", "..", "/..", "{", ",", "}", "\\", "\\\n", "'", '"', "$", "#", "~", "+",
-                 "-", "a", "*", " ", "$'", '$"', "\\x2f", "\\057", "\\,", "\\{", "=", ":", "@", "$$", "${S",
-                 "${S:-/}", "{,", ",}", "{/../}", "...", "usr"]
-        vals = ["/tmp/hx/a/b", "/tmp/hx/a", "/", ".", "..", "a,b", "#", "x", "-", "+", "/tmp/hx/a/b/c/d"]
-        lead = ["S={v}; ", "S={v} && ", "export S={v}\n", "S={v}; T=$S/..; ", ""]
-        heads = ["rm -rf ", "rm -r -f ", "\\rm -rf ", "r\\\nm -rf ", "rm \\\n-rf ", "command rm -rf ", "/bin/rm -rf "]
-        misses, checked = [], 0
+        self._fuzz(gen_chars, "문자 단위 생성 명령")
+
+    # ── 실행 시점 가드(bin/rm) — 정적 가드 없이 래퍼 혼자서 같은 성질을 지키는가 ──────────────────────
+    def _wrapped_fuzz(self, gen, label):
+        rnd, n = fuzz_rng()
+        misses = []
         for _ in range(n):
-            body = "".join(rnd.choice(atoms) for _ in range(rnd.randint(1, 7)))
-            cmd = rnd.choice(lead).replace("{v}", rnd.choice(vals)) + rnd.choice(heads) + body
-            if self.bdg.scan(cmd):
-                continue
-            checked += 1
-            bad = [a for a in real_args(cmd, self.cwd, self.home) if is_dangerous(a, self.cwd, self.home)]
+            cmd = gen(rnd)
+            bad = [a for a in real_args(cmd, self.cwd, self.home, wrapper=self.recorder)
+                   if is_dangerous(a, self.cwd, self.home)]
             if bad:
                 misses.append((cmd, bad))
         self.maxDiff = None
-        self.assertGreater(checked, 50)
-        self.assertEqual(misses[:8], [], f"문자 단위 생성 명령 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
+        self.assertEqual(misses[:8], [], f"{label} 중 실행 시점 가드가 진짜 rm 에 넘긴 위험 대상 {len(misses)}개")
+
+    def test_runtime_guard_alone_never_passes_a_dangerous_target(self):
+        # 정적 가드로 거르지 않는다 — 래퍼 혼자 막아야 한다. 단 `/bin/rm` 은 PATH 를 거치지 않아 래퍼 밖이다(정적 가드 몫).
+        self._wrapped_fuzz(gen_grammar, "문법 단위 생성 명령")
+        heads = ["rm -rf ", "rm -r -f ", "\\rm -rf ", "r\\\nm -rf ", "rm \\\n-rf ", "command rm -rf ",
+                 "find . -maxdepth 0 -exec rm -rf {} + ; rm -rf ", "echo | xargs rm -rf "]
+        self._wrapped_fuzz(lambda r: gen_chars(r, heads), "문자 단위 생성 명령")
+
+    def test_runtime_guard_passes_routine_cleanup(self):
+        # 정밀도: 정적 가드가 위치를 몰라 막던 정상 명령도 래퍼는 실제 경로를 보고 통과시킨다
+        os.makedirs(os.path.join(self.cwd, "dist"), exist_ok=True)
+        for cmd, want in [("rm -rf dist", "dist"), ("rm -rf /tmp/hx/build-x", "/tmp/hx/build-x"),
+                          ('T=/tmp/hx; rm -rf "$T"/foo', "/tmp/hx/foo"), ("cd .. && rm -rf old-proj", "old-proj"),
+                          ("rm notes.txt", "notes.txt"), ("rm -rf -- -weird", "-weird")]:
+            with self.subTest(cmd=cmd):
+                got = real_args(cmd, self.cwd, self.home, wrapper=self.recorder)
+                self.assertTrue(got and got[0].endswith(want), got)
+
+    def test_runtime_guard_follows_symlinks_only_where_rm_does(self):
+        link = os.path.join(self.cwd, "to-home")
+        if not os.path.islink(link):
+            os.symlink(self.home, link)
+        self.assertEqual(real_args("rm -rf to-home/", self.cwd, self.home, wrapper=self.recorder), [])  # 홈을 지운다
+        got = real_args("rm -rf to-home", self.cwd, self.home, wrapper=self.recorder)                  # 링크만 지운다
+        self.assertEqual([os.path.basename(g) for g in got], ["to-home"])
 
     def test_known_safe_forms_still_pass(self):
         # 정밀도: 오늘 실사용에서 막혀 고친 형태는 계속 통과해야 한다(과차단 회귀 방지)

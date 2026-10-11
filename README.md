@@ -63,7 +63,7 @@
 
 ## 구성
 
-### 훅 16개 — 설치 즉시 자동 실행된다
+### 훅 17개 — 설치 즉시 자동 실행된다
 
 | 훅 | 이벤트 | 하는 일 | 동작 방식 |
 |---|---|---|---|
@@ -78,6 +78,7 @@
 | `security-nudge` | PostToolUse · Edit/Write | 인증·마이그레이션·`supabase.*`·`.env*` 편집 시 `/review-stability` 권고 | 알림 · 같은 파일 1회 |
 | `workflow-entry-guard` | PostToolUse · Write | 플랜 없이 첫 `src/` 코드를 만들면 워크플로 규정 주입 | 알림 · 프로젝트당 1회 |
 | `stack-compliance-guard` | PostToolUse · Edit/Write | Tailwind·`@/*` alias·TanStack Query 미사용 신호 적출 | 알림 · 프로젝트당 1회 |
+| `install-rm-guard` | SessionStart | 실행 시점 rm 가드(`bin/rm`)를 이 세션 Bash 의 PATH 앞에 둔다(`CLAUDE_ENV_FILE`). 래퍼는 bash 가 변수·따옴표·이어쓰기·중괄호 확장을 다 끝낸 **실제 인자**로 `rm -r` 을 판정한다 — 시스템·홈 최상위, 홈의 상위, 현재 위치·세션 프로젝트와 그 상위, `.git`. 대상 끝의 `/` 가 링크를 따라갈 때만 링크를 푼다. `rm`·`\rm`·`command rm`·`xargs`/`find -exec` 의 rm 이 지나고, `/bin/rm` 처럼 경로를 직접 쓴 호출은 정적 가드 몫이다 | **차단**(rm 종료 코드 1 + 다음 행동) · 판정 실패 시 fail-closed · 의도한 삭제는 사용자가 `! /bin/rm -r …` |
 | `session-start-summary` | SessionStart | 브랜치·Phase·미커밋 3줄 요약 | 알림 · git 읽기만 |
 | `harness-boarding-guard` | SessionStart | 하네스 관할 프로젝트인데 탑승 절차가 빠졌으면 적출 | 알림 |
 | `review-protocol` | UserPromptSubmit | 리뷰·감사 요청을 감지하면 리뷰 프로토콜 주입 | 알림 · "리뷰 테이블"처럼 엔티티 이름이거나 리뷰 결과 반영 요청이면 침묵 |
@@ -221,7 +222,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 47개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 50개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 27케이스에서 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동 · CI 수동 잡(사용량 소모) |
 | 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 실행되지 못한 런(한도·샌드박스 거부·인증 실패)은 점수에서 뺀다 — 세면 "아무 일도 없음"이 가짜 만점이 된다. 기준 미만이거나 유효 런이 없는 케이스가 있으면 exit 1 | eval 뒤 |

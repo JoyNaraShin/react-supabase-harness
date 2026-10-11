@@ -43,6 +43,9 @@ MUTANTS = [
     ("decode-ansi-noop", "shellparse.py", "decode_ansi_quotes", "cmd"),
     ("collapse-params-noop", "shellparse.py", "collapse_params", "cmd"),
     ("expand-line-noop", "shellparse.py", "_expand_line", "line"),
+    ("rm-wrapper-never", "../bin/rm", "why_dangerous", '""'),
+    ("rm-wrapper-nonrecursive", "../bin/rm", "parse", "(False, args)"),
+    ("rm-install-noop", "install-rm-guard.py", "main", "None"),
     ("leading-assignments-none", "shellparse.py", "leading_assignments", "{}"),
     ("changed-paths-none", "gitsnap.py", "changed_paths", "[]"),
     ("snapshot-read-only-always", "snapshot-guard.py", "_read_only", "True"),
@@ -98,7 +101,7 @@ class MutationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.base = Path(tempfile.mkdtemp(prefix="harness-mut-"))
-        for d in ("hooks", "gates", "docs", "skills", "agents", "tests", "scripts", ".claude-plugin"):
+        for d in ("hooks", "bin", "gates", "docs", "skills", "agents", "tests", "scripts", ".claude-plugin"):
             if (ROOT / d).exists():
                 shutil.copytree(ROOT / d, cls.base / d, ignore=shutil.ignore_patterns("__pycache__"))
         cls.survivors = []
