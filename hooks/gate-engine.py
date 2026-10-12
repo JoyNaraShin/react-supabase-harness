@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
 import shellparse  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,21 +299,10 @@ def p_glob_exists(ctx, a):
 
 
 def p_harness_target(ctx, a):
-    """하네스 관할 프로젝트인가. harness-boarding-guard 와 같은 판정(일관성)."""
-    r = ctx["root"]
-    if (r / ".claude-plugin").is_dir() or not (r / "package.json").is_file():
-        return (False, "")
-    hj = r / ".harness.json"
-    if hj.is_file():
-        try:
-            if json.loads(hj.read_text()).get("role", "project") in ("template", "prototype"):
-                return (False, "")
-        except Exception:
-            pass
-    ok = (r / "docs" / "plans").is_dir() or (r / "docs" / "RULES.md").is_file() or (r / "supabase").is_dir()
+    """하네스 관할 프로젝트인가. 판정은 hooks/scope.py 한 곳에 있다(boarding-guard·T1 훅과 같은 답)."""
     # 매치 문자열을 내지 않는다 — 관할 여부는 '무엇이 걸렸나'가 아니라 전제 조건이다.
     # (프로젝트 폴더명을 내면 plan-first 차단 메시지에 파일 경로 대신 폴더명이 찍힌다.)
-    return (ok, "")
+    return (scope.is_harness(ctx["root"]), "")
 
 
 def p_command_regex(ctx, a):

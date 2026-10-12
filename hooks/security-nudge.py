@@ -17,6 +17,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 
 def state_path() -> Path:
     base = os.environ.get("CLAUDE_PROJECT_DIR") or "."
@@ -55,6 +58,8 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
     except Exception:
+        sys.exit(0)
+    if not scope.applies("security-nudge", scope.project_root(data)):
         sys.exit(0)
 
     if data.get("tool_name", "") not in ("Edit", "Write"):

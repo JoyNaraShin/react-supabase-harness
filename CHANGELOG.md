@@ -2,6 +2,35 @@
 
 이전 버전의 변경 내역은 git 이력에 있다. 이 파일은 공개 이후부터 기록한다.
 
+## 0.37.0 — 관할 공용화: T0 는 모든 레포, T1 은 하네스 관할 프로젝트만
+
+플러그인은 사용자 스코프로 설치되어 모든 세션에서 돈다. 그런데 관할(이 레포가 하네스 프로젝트인가)을 묻는 훅은
+`harness-boarding-guard`·`gate-engine` 의 `harnessTarget` 둘뿐이었고, 둘이 판정을 따로 구현했다. 나머지 워크플로 훅
+(위임 차단·파일 산출 강제·커밋 경계·포맷·편집 카운터 등)은 하네스와 무관한 레포에서도 돌았다(r-fresh F1–F5).
+
+- **`hooks/scope.py`** — 관할 판정을 한 곳으로 모았다. `project_root`(CLAUDE_PROJECT_DIR → 훅 입력 cwd → 없음),
+  `kind`(self·template·prototype·harness·other), `applies(훅, 루트)`. 모든 등록 훅이 계층 표 `TIERS` 에 정확히 한 번
+  나온다(테스트가 hooks.json 과 대조한다). 표에 없는 이름은 KeyError 다(조용히 통과하지 않는다).
+- **T0 전역**: 정정·파괴 명령·rm 가드·스냅샷·gate-engine(관할 조건 없는 룰)·리뷰 프로토콜·판정 기록·커밋 자기 신고
+  알림. **T1 관할만**: 위임 차단·파일 산출 강제·커밋 경계·사후 diff·보안 권고·스택 신호·편집 카운터·포맷·상태 요약·
+  탑승 진단. `workflow-entry-guard` 는 자기 조건(react 의존성 + plan 없음)을 그대로 쓴다.
+- **판정 변화**: 탑승 마커 `.harness.json`(role project)이 있으면 `package.json`·구조가 없어도 관할이다(전에는
+  `package.json` 과 구조가 필요했다). 하네스 레포 자신에는 `commit-boundary-gate`·`block-impl-delegation` 만 돌고,
+  코드 영역은 `hooks/`·`bin/`·`tests/` 다(전에는 둘 다 영역 판정이 레포 구조와 맞지 않았다).
+- `subagent-audit` 은 한 파일 안에서 나뉜다 — 판정 기록(`verdicts.jsonl`)은 T0 소비자(verify FAIL 커밋 차단·
+  `no-pr-with-critical`)가 기대므로 어디서나 쓰고, 시작 스냅샷과 코드 영역 diff 는 관할에서만 한다.
+- `require-agent-output-file` 의 근거 문구를 고쳤다 — "Claude Code 가 거부한다"가 아니라 "플랫폼 지침과 충돌해
+  파일이 남지 않을 수 있다"(r-fresh F9, 실측은 했으나 거부가 플랫폼 기능인지는 확인 못 함).
+- 테스트: 관할 픽스처(`HARNESS_FIXTURE`, 프로젝트를 지정하지 않은 호출의 기본값)와 그 관할 단언, T1 훅마다 같은
+  입력의 관할/비관할 쌍, T0 가 비관할에서도 막는지, 하네스 레포 자신의 적용 범위. 뮤턴트 3개 추가
+  (`scope-applies-always`·`scope-kind-never-harness`·`scope-root-none`).
+
+한계:
+- 판정 단위는 세션 프로젝트다. 관할 레포 세션에서 다른 레포를 고쳐도 T1 이 돌고, 그 반대는 돌지 않는다.
+- 서브에이전트·워크트리에서 `CLAUDE_PROJECT_DIR` 이 세션 루트에 머문다는 것은 **공식 훅 문서로 확인**했고, 실제
+  서브에이전트 실행 스모크는 하지 않았다(훅 설정을 바꿔야 관찰할 수 있다).
+- 비관할 레포에서 T1 보호가 사라진 것은 의도된 변화다. T0 에는 끄는 스위치가 없다.
+
 ## 0.36.2 — 정정 게이트의 남은 거짓 신원 (파이프·출력 속 낱말) · README 측정 표기 정정
 
 0.35.5 뒤에도 실사용에서 매 턴 `head`·`tail`·`git status --short` 에 근거 없는 정정을 요구했다. 세션 실 트랜스크립트를

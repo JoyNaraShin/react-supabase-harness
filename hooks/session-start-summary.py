@@ -11,6 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 
 def run(cmd, timeout=1.5):
     try:
@@ -112,28 +115,33 @@ def commit_ask_rule(project: str) -> bool:
 
 
 def main() -> None:
-    branch = current_branch()
-    ab = ahead_behind(branch)
-    phase = current_phase(branch)
-    uncommitted = uncommitted_count()
-
-    lines = [
-        f"브랜치: {branch}" + (f" ({ab})" if ab else ""),
-        f"Phase 추정: {phase}",
-        f"미커밋: {uncommitted}개",
-    ]
-    # 스킬·훅 메시지에 펼쳐지는 하네스 절대경로를 작업 대상으로 착각하는 일이 있었다(eval 실측) — 둘을 못박는다.
-    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    plugin = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if plugin and os.path.realpath(plugin) != os.path.realpath(project):
-        lines.append(f"작업 대상 = {project} · 하네스 설치 경로 {plugin} 는 규칙 문서를 읽는 곳이지 작업·리뷰 대상이 아니다")
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        data = {}
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd()
+    lines = []
+    if scope.applies("session-start-summary.status", scope.project_root(data)):
+        branch = current_branch()
+        ab = ahead_behind(branch)
+        lines += [
+            f"브랜치: {branch}" + (f" ({ab})" if ab else ""),
+            f"Phase 추정: {current_phase(branch)}",
+            f"미커밋: {uncommitted_count()}개",
+        ]
+        # 스킬·훅 메시지에 펼쳐지는 하네스 절대경로를 작업 대상으로 착각하는 일이 있었다(eval 실측) — 둘을 못박는다.
+        plugin = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        if plugin and os.path.realpath(plugin) != os.path.realpath(project):
+            lines.append(f"작업 대상 = {project} · 하네스 설치 경로 {plugin} 는 규칙 문서를 읽는 곳이지 작업·리뷰 대상이 아니다")
+    # T0 — 커밋 승인 게이트(block-destructive-git)는 어느 레포에서든 돈다. 그 한계 안내도 같이 간다.
     if os.path.isfile(os.path.join(project, "package.json")) and not commit_ask_rule(project):
         lines.append("커밋 승인이 자기 신고 상태다 — permissions.ask 에 `Bash(git commit *)` 가 없다. 플랫폼이 직접 "
                      "묻게 하려면 사용자에게 BOOTSTRAP 2단계(.claude/settings.json)를 제안하라(설정 변경은 사용자 결정).")
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "SessionStart",
-        "additionalContext": "\n".join(lines),
-    }}))
+    if lines:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": "\n".join(lines),
+        }}))
     sys.exit(0)
 
 

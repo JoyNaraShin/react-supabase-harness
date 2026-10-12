@@ -38,6 +38,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 # 띠. 20 = 슬라이스 둘이 겹친 지점(이 워크플로의 한 슬라이스는 대개 3~10파일).
 # 40 = commit 스킬이 이미 못 박아 둔 "경계 재검토" 선.
 BANDS = (20, 40)
@@ -117,6 +120,8 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
     except Exception:
+        sys.exit(0)
+    if not scope.applies("commit-boundary-gate", scope.project_root(data)):
         sys.exit(0)
 
     if data.get("stop_hook_active"):

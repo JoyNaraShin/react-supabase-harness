@@ -22,12 +22,25 @@ HOOKS = ROOT / "hooks"
 IMPORT_MUI = "import { Button } from " + '"' + "@mui/material" + '";'
 ADD_UI_LIB = "pnpm add " + "an" + "td"
 
+# 관할 픽스처 — T1 훅(hooks/scope.py)은 하네스 관할 프로젝트에서만 돈다. 프로젝트를 지정하지 않은 호출은
+# 이 디렉터리를 세션 프로젝트로 쓴다. 비관할에서 침묵하는지는 ScopeTest 가 같은 입력의 쌍으로 본다.
+HARNESS_FIXTURE = tempfile.mkdtemp(prefix="harness-fixture-")
+Path(HARNESS_FIXTURE, ".harness.json").write_text('{"role": "project"}')
+
+
+def mark_harness(d) -> Path:
+    """디렉터리를 하네스 관할 프로젝트로 표시한다(탑승 마커)."""
+    Path(d, ".harness.json").write_text('{"role": "project"}')
+    return Path(d)
+
 
 def run_hook(name: str, payload, env: dict | None = None, cwd: str | None = None) -> dict | None:
     """훅을 실행하고 stdout JSON 을 돌려준다. 출력이 없으면 None(= 통과·침묵)."""
     e = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_", "HARNESS_GATE_"))}
     e["CLAUDE_PLUGIN_ROOT"] = str(ROOT)
     e.update(env or {})
+    if "CLAUDE_PROJECT_DIR" not in e and not (isinstance(payload, dict) and payload.get("cwd")):
+        e["CLAUDE_PROJECT_DIR"] = HARNESS_FIXTURE
     raw = payload if isinstance(payload, str) else json.dumps(payload)
     cmd = ["bash" if name.endswith(".sh") else sys.executable, str(HOOKS / name)]
     p = subprocess.run(cmd, input=raw, capture_output=True, text=True, env=e, cwd=cwd, timeout=20)
@@ -430,6 +443,7 @@ class DelegationTest(unittest.TestCase):
     # block-impl-delegation — 스폰 문구가 아니라 서브에이전트의 실제 쓰기를 본다
     def sub(self, tool, ti, agent="general-purpose", proj=None, agent_id="a1"):
         payload = {"tool_name": tool, "tool_input": ti, "agent_type": agent, "cwd": str(proj)}
+        mark_harness(proj)
         if agent_id:
             payload["agent_id"] = agent_id
         return run_hook("block-impl-delegation.py", payload, env={"CLAUDE_PROJECT_DIR": str(proj)})
@@ -760,7 +774,8 @@ class CommitBoundaryTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        (self.repo / ".gitignore").write_text(".claude/\n")
+        (self.repo / ".gitignore").write_text(".claude/\n.harness.json\n")
+        mark_harness(self.repo)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -877,7 +892,7 @@ class StackComplianceTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.proj = Path(self.tmp.name)
+        self.proj = mark_harness(self.tmp.name)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -1601,7 +1616,9 @@ class CommitAskRuleNoticeTest(unittest.TestCase):
             self.assertIn("Bash(git commit *)", context(run_hook("session-start-summary.py", {}, env=env, cwd=d)))
             Path(d, ".claude").mkdir()
             Path(d, ".claude", "settings.json").write_text(json.dumps({"permissions": {"ask": ["Bash(git commit *)"]}}))
-            self.assertNotIn("Bash(git commit *)", context(run_hook("session-start-summary.py", {}, env=env, cwd=d)))
+            # 비관할 + 알림 해소 = 할 말이 없다(침묵). 알림 자체는 T0 라 비관할에서도 나왔다(위 단언).
+            out = run_hook("session-start-summary.py", {}, env=env, cwd=d)
+            self.assertTrue(out is None or "Bash(git commit *)" not in context(out))
 
 
 if __name__ == "__main__":
@@ -1648,6 +1665,7 @@ class SessionSummaryPathTest(unittest.TestCase):
     def test_names_project_and_plugin_root_apart(self):
         # 회귀(eval): 소형 모델이 스킬에 펼쳐진 하네스 절대경로를 작업 대상으로 착각해 그쪽으로 cd 했다
         with tempfile.TemporaryDirectory() as d:
+            mark_harness(d)
             out = run_hook("session-start-summary.py", {}, env={"CLAUDE_PROJECT_DIR": d}, cwd=d)
             ctx = context(out)
             self.assertIn(f"작업 대상 = {d}", ctx)
@@ -1797,3 +1815,167 @@ class RuntimeRmGuardInstallTest(unittest.TestCase):
                     p = subprocess.run(["bash", "-c", f'X=; rm {flags} "$X"/'], capture_output=True, text=True,
                                        env=env, cwd=home)
                     self.assertEqual(p.returncode, 1, p.stderr)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 관할(hooks/scope.py) — T0 는 어디서나, T1 은 하네스 관할 프로젝트에서만. 같은 입력의 쌍으로 본다.
+# ─────────────────────────────────────────────────────────────────────────────
+def _scope():
+    spec = importlib.util.spec_from_file_location("scope", HOOKS / "scope.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class ScopeTest(unittest.TestCase):
+    def setUp(self):
+        self.scope = _scope()
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(os.path.realpath(self.tmp.name))
+        self.plain = base / "plain"                                       # 하네스와 무관한 레포
+        self.harness = base / "harness"
+        self.plain.mkdir()
+        self.harness.mkdir()
+        mark_harness(self.harness)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fixture_is_in_jurisdiction(self):
+        # 다른 테스트의 T1 단언이 전부 이 픽스처에 기댄다 — 픽스처가 관할을 잃으면 여기서 먼저 깨진다
+        self.assertEqual(self.scope.kind(Path(HARNESS_FIXTURE)), "harness")
+        self.assertEqual(self.scope.kind(self.harness), "harness")
+        self.assertEqual(self.scope.kind(self.plain), "other")
+
+    def test_every_registered_hook_has_exactly_one_tier(self):
+        cmds = [h["command"] for groups in json.loads((HOOKS / "hooks.json").read_text())["hooks"].values()
+                for g in groups for h in g["hooks"]]
+        names = {Path(c.split("/hooks/", 1)[1].rstrip('"')).stem for c in cmds}
+        stems = {}
+        for k in self.scope.TIERS:
+            stems.setdefault(k.split(".", 1)[0], []).append(k)
+        self.assertEqual(names, set(stems), "hooks.json 과 scope.TIERS 가 어긋났다")
+        for stem, parts in stems.items():
+            with self.subTest(hook=stem):
+                # 부분으로 나눈 훅은 부분만, 나누지 않은 훅은 이름 하나만 — 섞으면 어느 쪽이 이기는지 모호하다
+                self.assertTrue(parts == [stem] or all("." in p for p in parts), parts)
+        self.assertRaises(KeyError, self.scope.applies, "no-such-hook", self.plain)
+
+    def test_kind_by_marker_and_structure(self):
+        d = Path(self.tmp.name)
+        for name, setup, want in [
+            ("marker-only", lambda p: mark_harness(p), "harness"),
+            ("proto", lambda p: (p / ".harness.json").write_text('{"role": "prototype"}'), "prototype"),
+            ("tmpl", lambda p: (p / ".harness.json").write_text('{"role": "template"}'), "template"),
+            ("supa", lambda p: ((p / "package.json").write_text("{}"), (p / "supabase").mkdir()), "harness"),
+            ("pkg-only", lambda p: (p / "package.json").write_text("{}"), "other"),
+            ("supa-proto", lambda p: ((p / "package.json").write_text("{}"), (p / "supabase").mkdir(),
+                                      (p / ".harness.json").write_text('{"role": "prototype"}')), "prototype"),
+            ("other-plugin", lambda p: ((p / ".claude-plugin").mkdir(), (p / ".claude-plugin" / "plugin.json")
+                                        .write_text('{"name": "x"}'), mark_harness(p)), "other"),
+        ]:
+            with self.subTest(name=name):
+                p = d / name
+                p.mkdir()
+                setup(p)
+                self.assertEqual(self.scope.kind(p), want)
+        self.assertEqual(self.scope.kind(None), "other")
+        self.assertEqual(self.scope.kind(ROOT), "self")
+
+    def test_project_root_prefers_session_project_then_payload(self):
+        env = os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        try:
+            self.assertIsNone(self.scope.project_root({}))
+            self.assertEqual(self.scope.project_root({"cwd": str(self.plain)}), self.plain)
+            os.environ["CLAUDE_PROJECT_DIR"] = str(self.harness)
+            self.assertEqual(self.scope.project_root({"cwd": str(self.plain)}), self.harness)
+        finally:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+            if env is not None:
+                os.environ["CLAUDE_PROJECT_DIR"] = env
+
+    def _pair(self, hook, payload_for, *, extra_env=None):
+        out = {}
+        for k, root in (("harness", self.harness), ("plain", self.plain)):
+            env = dict(extra_env or {}, CLAUDE_PROJECT_DIR=str(root))
+            out[k] = run_hook(hook, payload_for(root), env=env, cwd=str(root))
+        return out
+
+    def test_t1_hooks_fire_in_jurisdiction_and_stay_silent_outside(self):
+        cases = {
+            "block-impl-delegation.py": lambda r: {"tool_name": "Write", "agent_id": "a1", "agent_type": "general-purpose",
+                                                   "cwd": str(r), "tool_input": {"file_path": str(r / "src/x.ts"), "content": "x"}},
+            "require-agent-output-file.py": lambda r: {"tool_name": "Agent", "cwd": str(r), "tool_input": {
+                                                       "subagent_type": "general-purpose", "prompt": "시장 조사해줘"}},
+        }
+        for hook, payload in cases.items():
+            with self.subTest(hook=hook):
+                out = self._pair(hook, payload)
+                self.assertTrue(denied(out["harness"]), hook)
+                self.assertIsNone(out["plain"], hook)
+
+    def test_commit_boundary_is_t1(self):
+        for root in (self.harness, self.plain):
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".gitignore").write_text(".harness.json\n")
+            for i in range(30):
+                (root / f"f{i}.txt").write_text(str(i))
+        home = str(Path(self.tmp.name) / ".home")
+        out = self._pair("commit-boundary-gate.py", lambda r: {"cwd": str(r)}, extra_env={"HOME": home})
+        self.assertIn("미커밋 변경", context(out["harness"]))
+        self.assertIsNone(out["plain"])
+
+    def test_session_summary_status_is_t1_but_commit_notice_is_t0(self):
+        for root in (self.harness, self.plain):
+            (root / "package.json").write_text("{}")
+        home = Path(self.tmp.name) / ".home2"
+        home.mkdir()
+        out = self._pair("session-start-summary.py", lambda r: {"cwd": str(r)}, extra_env={"HOME": str(home)})
+        self.assertIn("브랜치:", context(out["harness"]))
+        self.assertNotIn("브랜치:", context(out["plain"]))
+        self.assertIn("Bash(git commit *)", context(out["plain"]))
+
+    def test_t0_hooks_still_fire_outside_jurisdiction(self):
+        env = {"CLAUDE_PROJECT_DIR": str(self.plain)}
+        self.assertTrue(denied(run_hook("block-destructive-git.py", {"tool_name": "Bash", "cwd": str(self.plain),
+                                        "tool_input": {"command": "git reset --hard HEAD~1"}}, env=env)))
+        self.assertTrue(denied(run_hook("gate-engine.py", {"tool_name": "Bash", "cwd": str(self.plain),
+                                        "tool_input": {"command": ADD_UI_LIB}}, env=env)))
+
+    def test_subagent_audit_records_verdicts_everywhere_but_diffs_only_in_jurisdiction(self):
+        for root in (self.harness, self.plain):
+            _git(str(root), "init", "-q", "-b", "main")
+            (root / "src").mkdir()
+            (root / "src" / "a.ts").write_text("a\n")
+            _git(str(root), "add", "-A")
+            _git(str(root), "commit", "-qm", "init")
+        res = {}
+        for k, root in (("harness", self.harness), ("plain", self.plain)):
+            env = {"CLAUDE_PROJECT_DIR": str(root)}
+            base = {"agent_id": "g1", "agent_type": "general-purpose", "session_id": "s", "cwd": str(root),
+                    "stop_hook_active": False, "last_assistant_message": ""}
+            run_hook("subagent-audit.py", dict(base, hook_event_name="SubagentStart"), env=env, cwd=str(root))
+            (root / "src" / "a.ts").write_text("changed\n")
+            res[k] = run_hook("subagent-audit.py", dict(base, hook_event_name="SubagentStop"), env=env, cwd=str(root))
+            run_hook("subagent-audit.py", dict(base, hook_event_name="SubagentStop", agent_id="v1",
+                     agent_type="react-supabase-harness:verifier", last_assistant_message="## Verdict\nFAIL"),
+                     env=env, cwd=str(root))
+            rec = (root / ".claude" / "state" / "verdicts.jsonl").read_text()
+            self.assertIn('"FAIL"', rec, k)
+        self.assertTrue(blocked(res["harness"]))
+        self.assertIsNone(res["plain"])
+
+    def test_harness_repo_itself_gets_only_the_listed_hooks(self):
+        self.assertTrue(self.scope.applies("block-impl-delegation", ROOT))
+        self.assertTrue(self.scope.applies("commit-boundary-gate", ROOT))
+        self.assertFalse(self.scope.applies("edit-counter", ROOT))
+        self.assertFalse(self.scope.applies("require-agent-output-file", ROOT))
+        env = {"CLAUDE_PROJECT_DIR": str(ROOT)}
+
+        def write(rel):
+            return run_hook("block-impl-delegation.py", {"tool_name": "Write", "agent_id": "a1", "cwd": str(ROOT),
+                            "agent_type": "general-purpose", "tool_input": {"file_path": str(ROOT / rel), "content": "x"}},
+                            env=env)
+        self.assertTrue(denied(write("hooks/new.py")))
+        self.assertTrue(denied(write("tests/test_new.py")))
+        self.assertIsNone(write("docs/notes.md"))

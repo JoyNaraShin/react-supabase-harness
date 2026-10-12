@@ -21,6 +21,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 # 훅 출력은 치환되지 않는다 — `${CLAUDE_PLUGIN_ROOT}` 를 그대로 내면 모델이 경로를 풀 수 없다.
 # 훅 프로세스에는 같은 이름의 환경변수가 export 된다(plugins-reference#where-each-variable-resolves).
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(Path(__file__).resolve().parent.parent)
@@ -83,6 +86,8 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
     except Exception:
+        sys.exit(0)
+    if not scope.applies("stack-compliance-guard", scope.project_root(data)):
         sys.exit(0)
 
     if data.get("tool_name") not in ("Write", "Edit"):

@@ -22,6 +22,9 @@ import os
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 EXTS = (".ts", ".tsx", ".js", ".jsx", ".json", ".css")
 
 
@@ -47,6 +50,8 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
     except Exception:
+        sys.exit(0)
+    if not scope.applies("format-on-edit", scope.project_root(data)):
         sys.exit(0)
 
     tool = data.get("tool_name", "")

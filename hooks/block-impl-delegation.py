@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
 import shellparse  # noqa: E402
 
 DEFAULT_CODE_ZONE = [
@@ -152,11 +153,15 @@ def main() -> None:
         data = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
+    if not scope.applies("block-impl-delegation", scope.project_root(data)):
+        sys.exit(0)
     if not data.get("agent_id"):
         sys.exit(0)                                   # 메인 세션
     agent = str(data.get("agent_type") or "subagent")
     root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or ".")
     policy = load_policy(root)
+    if scope.kind(scope.project_root(data)) == "self":
+        policy["codeZone"] = list(scope.SELF_CODE_ZONE)   # 하네스 레포 자신은 src/ 가 없다 — 코드는 hooks·bin·tests
     if agent.rsplit(":", 1)[-1] in policy["writers"] or agent in policy["writers"]:
         sys.exit(0)
 

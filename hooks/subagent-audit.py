@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gitsnap  # noqa: E402
+import scope  # noqa: E402
 
 VERDICT_FILE = Path(".claude") / "state" / "verdicts.jsonl"
 HARNESS_AGENTS = {"verifier", "craft-reviewer", "stability-reviewer", "structure-fitness-reviewer",
@@ -90,9 +91,9 @@ def on_start(data: dict, repo: str) -> None:
         f.write_text(sha)
 
 
-def on_stop(data: dict, root: Path, repo) -> None:
+def on_stop(data: dict, root: Path, repo, diff: bool = True) -> None:
     record_verdict(root, data, repo)
-    if not repo:
+    if not repo or not diff:
         return
     f = _state_file(repo, str(data.get("agent_id") or "unknown"))
     if not f or not f.is_file():
@@ -135,11 +136,12 @@ def main() -> None:
     root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or ".")
     repo = gitsnap.repo_root(str(root))
     event = data.get("hook_event_name")
+    diff = scope.applies("subagent-audit.diff", scope.project_root(data))   # ① 은 T1, ② 판정 기록은 T0
     try:
-        if event == "SubagentStart" and repo:
+        if event == "SubagentStart" and repo and diff:
             on_start(data, repo)
         elif event == "SubagentStop":
-            on_stop(data, root, repo)
+            on_stop(data, root, repo, diff)
     except Exception:
         pass                                           # fail-open — 감사가 작업을 세우지 않는다
     sys.exit(0)

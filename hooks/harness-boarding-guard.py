@@ -25,6 +25,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
+
 # 훅 출력은 치환되지 않는다 — `${CLAUDE_PLUGIN_ROOT}` 를 그대로 내면 모델이 경로를 풀 수 없다.
 # 훅 프로세스에는 같은 이름의 환경변수가 export 된다(plugins-reference#where-each-variable-resolves).
 PLUGIN_ROOT = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(Path(__file__).resolve().parent.parent)
@@ -42,48 +45,18 @@ def read(p: Path) -> str:
 
 
 def is_target(root: Path) -> bool:
-    """하네스가 관할하는 프로젝트인가. 아니면 아무 말도 하지 않는다.
+    """하네스가 관할하는 프로젝트인가. 아니면 아무 말도 하지 않는다. 판정은 hooks/scope.py 한 곳에 있다.
 
     관할 범위를 좁게 잡는 이유 = 오탐이 이 훅을 죽인다. "react 를 쓰면 전부"로 잡으면
     단발 프로토타입 수십 개가 매 세션 발화하고, 그러면 아무도 이 메시지를 읽지 않게 된다.
-    실제로 관할해야 하는 것은 **하네스 구조를 갖췄거나 Supabase 서비스인 프로젝트**다.
+    실제로 관할해야 하는 것은 **하네스 구조를 갖췄거나 Supabase 서비스이거나 탑승 마커가 있는 프로젝트**다.
 
-    제외:
-      · 하네스 저장소 자신 (.claude-plugin/)
-      · 템플릿 원본(마커 role=template) — `__PROJECT_NAME__` 이 살아 있는 게 정상이다
-      · 하네스 구조도 Supabase 도 없는 단발 프로토타입
+    🔴 제외는 휴리스틱이 아니라 마커로 한다(role=template·prototype).
+       첫 판은 package.json 의 name 이 템플릿 이름이면 템플릿으로 보고 제외했다.
+       그런데 템플릿을 손으로 복사한 프로젝트는 name 도 그대로다 — 즉 **표적 집단을 정확히
+       제외**해 버렸다(실측: 템플릿을 복사한 실프로젝트가 침묵). 추측하는 규칙은 이렇게 뒤집힌다.
     """
-    if (root / ".claude-plugin").is_dir():
-        return False
-    if not (root / "package.json").is_file():
-        return False
-
-    # 🔴 제외는 휴리스틱이 아니라 마커로 한다.
-    #    첫 판은 package.json 의 name 이 템플릿 이름이면 템플릿으로 보고 제외했다.
-    #    그런데 템플릿을 손으로 복사한 프로젝트는 name 도 그대로다 — 즉 **표적 집단을 정확히
-    #    제외**해 버렸다(실측: 템플릿을 복사한 실프로젝트가 침묵). 추측하는 규칙은 이렇게 뒤집힌다.
-    role = marker_role(root)
-    if role in ("template", "prototype"):
-        return False
-
-    has_structure = (root / "docs" / "plans").is_dir() or (root / "docs" / "RULES.md").is_file()
-    return has_structure or (root / "supabase").is_dir()
-
-
-def marker_role(root: Path):
-    """`.harness.json` 의 role. 없으면 None.
-
-    project(기본) — 하네스 관할. 탑승 상태를 검사한다.
-    prototype     — 단발 데모. 이슈·PR 플로우 대상이 아니다(사용자 결정을 파일로 기록).
-    template      — 템플릿 원본. `__PROJECT_NAME__` 이 살아 있는 게 정상이다.
-    """
-    f = root / ".harness.json"
-    if not f.is_file():
-        return None
-    try:
-        return json.loads(read(f)).get("role", "project")
-    except Exception:
-        return "project"
+    return scope.is_harness(root)
 
 
 def real_plans(root: Path) -> int:

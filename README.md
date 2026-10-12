@@ -59,6 +59,7 @@
 - **스택 준수 신호는 문자열 패턴이다.** `stack-compliance-guard` 는 `../../` import·컴포넌트 CSS import·`useEffect`+fetch 같은 우회 흔적을 알리기만 한다. 오탐 여지가 있어 차단하지 않는다.
 - **룰 술어와 위임 판정에 남긴 우회.** 목록에 없는 유사 UI 라이브러리는 `no-ui-library` 가 모른다. 실행 뒤 결과 검사는 커밋된 `package.json`(HEAD)과 비교하므로 git 이 아닌 프로젝트에서는 설치 명령 표기만 본다. 셸로 만든 코드의 `plan-first` 는 쓰기 대상이 명령에 드러나는 형태(heredoc·리다이렉트·`cp`·`sed -i` 등)만 본다 — 스크립트·인터프리터 안의 쓰기는 통과한다. 서브에이전트 사후 diff 는 백그라운드로 메인 세션과 동시에 돌면 그 사이 메인·사용자의 변경이 섞이고, 되돌리지 않고 보고만 시킨다(사용자 편집을 지우지 않기 위해). 같은 하위 명령 안에 쓰기 동사와 보호 경로 언급이 따로 있으면 읽기여도 막히는 과차단이 일부 남았다(예: `rm -f .claude/state/edit-count.json`).
 - **파괴적 명령 파서에 재현된 구멍이 남아 있다.** v0.32.0 적대 리뷰에서 우회(별칭·축약 옵션·경로 표기 변형 등)와 과차단(정상 명령이 막히는 경우)을 합쳐 20건 남짓 재현했다. 파서를 더 조이는 대신 v0.33.0 에서 결과 쪽 안전망을 붙였다 — `snapshot-guard` 가 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리를 스냅샷으로 남기고(어떤 표기로 지웠든 복구 가능), `pre-push` 훅이 기본 브랜치 강제 갱신·원격 ref 삭제를 표기와 무관하게 막는다. 스냅샷은 gitignore 대상(`.env` 등)과 레포 밖 파일을 보호하지 않고, `pre-push` 는 사용자가 설치해야 한다(`scripts/install-git-hooks.sh`). 파싱이 실패하면 차단 쪽으로 기우므로 따옴표가 복잡한 정상 명령이 막힐 수 있다. 막힌 경우 메시지가 비파괴 대안과 사용자 직접 실행(`! <명령>`)을 안내한다.
+- **관할은 세션 프로젝트로 판정한다.** 관할 레포의 세션에서 다른 레포를 고쳐도 T1 이 돌고, 비관할 레포의 세션에서 관할 레포를 고치면 돌지 않는다. 서브에이전트가 `isolation: worktree` 로 돌 때 위임 차단의 코드 영역은 세션 루트 기준이라 워크트리 경로의 쓰기는 영역 밖으로 본다(0.37.0 이전부터 같은 한계).
 - **측정 범위.** 서브에이전트의 툴 호출에도 PreToolUse 훅이 발동하고 입력에 `agent_id` 가 실린다는 전제(`block-impl-delegation`)는 공식 훅 문서와 eval(서브에이전트의 `src/` 쓰기가 실제로 막힘)로 확인했다. `settings.json` 의 `env` 값이 훅 프로세스에 전달되는지는 확인하지 않았다. eval 은 dontAsk 권한 모드의 샌드박스에서 돌아서, 사람이 승인 프롬프트를 보는 대화형 세션과 동작이 다를 수 있다.
 
 ## 구성
@@ -79,11 +80,25 @@
 | `workflow-entry-guard` | PostToolUse · Write | 플랜 없이 첫 `src/` 코드를 만들면 워크플로 규정 주입 | 알림 · 프로젝트당 1회 |
 | `stack-compliance-guard` | PostToolUse · Edit/Write | Tailwind·`@/*` alias·TanStack Query 미사용 신호 적출 | 알림 · 프로젝트당 1회 |
 | `install-rm-guard` | SessionStart | 실행 시점 rm 가드(`bin/rm`)를 이 세션 Bash 의 PATH 앞에 둔다(`CLAUDE_ENV_FILE`). 래퍼는 bash 가 변수·따옴표·이어쓰기·중괄호 확장을 다 끝낸 **실제 인자**로 `rm -r` 을 판정한다 — 시스템·홈 최상위, 홈의 상위, 현재 위치·세션 프로젝트와 그 상위, `.git`. 대상 끝의 `/` 가 링크를 따라갈 때만 링크를 푼다. `rm`·`\rm`·`command rm`·`xargs`/`find -exec` 의 rm 이 지나고, `/bin/rm` 처럼 경로를 직접 쓴 호출은 정적 가드 몫이다 | **차단**(rm 종료 코드 1 + 다음 행동) · 판정 실패 시 fail-closed · 의도한 삭제는 사용자가 `! /bin/rm -r …` |
-| `session-start-summary` | SessionStart | 브랜치·Phase·미커밋 3줄 요약 | 알림 · git 읽기만 |
+| `session-start-summary` | SessionStart | 브랜치·Phase·미커밋 3줄 요약(관할만) · 커밋 승인이 자기 신고 상태면 알림(모든 레포) | 알림 · git 읽기만 |
 | `harness-boarding-guard` | SessionStart | 하네스 관할 프로젝트인데 탑승 절차가 빠졌으면 적출 | 알림 |
 | `review-protocol` | UserPromptSubmit | 리뷰·감사 요청을 감지하면 리뷰 프로토콜 주입 | 알림 · "리뷰 테이블"처럼 엔티티 이름이거나 리뷰 결과 반영 요청이면 침묵 |
 | `report-failures-gate` | Stop | 이번 턴 툴 실패를 답변이 언급하지 않으면 차단. 앞서 실패한 명령이 성공했는데 정정이 없으면 차단(되돌릴 수 없는 것)/피드백(그 외) | **차단/피드백** · 트랜스크립트 못 읽으면 통과 |
 | `commit-boundary-gate` | Stop | 미커밋 변경이 20·40개 띠를 넘으면 커밋 단위 제안 요구 | 모델 피드백 · 띠당 1회 |
+
+#### 어느 레포에서 도는가 — 관할 (0.37.0)
+
+플러그인은 사용자 스코프로 설치되어 모든 세션에서 돈다. 그래서 훅을 두 계층으로 나눴다. 판정은 `hooks/scope.py` 한 곳에 있다.
+
+| 계층 | 도는 곳 | 훅 |
+|---|---|---|
+| **T0 전역** | 모든 레포 | `report-failures-gate` · `block-destructive-git` · `install-rm-guard` · `snapshot-guard` · `gate-engine`(관할 조건이 없는 룰과 프로젝트 룰 파일) · `review-protocol` · `subagent-audit` 의 판정 기록 · `session-start-summary` 의 커밋 자기 신고 알림 |
+| **T1 하네스 관할만** | 관할 프로젝트 | `block-impl-delegation` · `require-agent-output-file` · `commit-boundary-gate` · `subagent-audit` 의 코드 영역 diff · `security-nudge` · `stack-compliance-guard` · `edit-counter` · `format-on-edit` · `session-start-summary` 의 상태 요약 · `harness-boarding-guard` · `harnessTarget` 룰(`plan-first`·`fit-before-phase`) |
+| **자체 조건** | react 의존성이 있고 plan 이 없는 레포 | `workflow-entry-guard` |
+
+- **관할 프로젝트** = 탑승 마커 `.harness.json`(role 이 `template`·`prototype` 이 아님)이 있거나, `package.json` 이 있고 `docs/plans/`·`docs/RULES.md`·`supabase/` 중 하나가 있는 레포. 판정 단위는 **세션 프로젝트**(`CLAUDE_PROJECT_DIR`, 없으면 훅 입력의 `cwd`)다 — 쓰기 대상 경로가 속한 레포가 아니다. `CLAUDE_PROJECT_DIR` 은 워크트리에 들어가도 세션을 시작한 루트를 가리킨다(공식 훅 문서).
+- **하네스 레포 자신**에는 `commit-boundary-gate`·`block-impl-delegation` 만 적용하고, 코드 영역은 `hooks/`·`bin/`·`tests/` 다.
+- 비관할 레포에서는 위임 차단·파일 산출 강제·커밋 경계 같은 워크플로 규칙이 **돌지 않는다**(의도된 동작). T0 계층에는 끄는 스위치가 없다.
 
 Stop 훅의 피드백은 `additionalContext` 로 모델에게 전달된다(`systemMessage` 는 사용자 화면에만 보이므로 쓰지 않는다). 이 피드백은 "알림"이라도 **턴을 한 번 더 이어 가게 만든다** — 모델이 피드백에 답해야 멈춘다. 상태 파일은 `<project>/.claude/state/`(gitignore 권장 — 판정 기록 `verdicts.jsonl` 포함), git 내부(`refs/harness/snapshots/`, `.git/harness-subagents/`)와 `~/.claude/state/commit-boundary/` 에 쓴다. 하네스 밖에서 도는 감시자 하나(`hooks/_external/plugin-drift-check.sh` — 플러그인이 꺼졌거나 설치본에 훅이 빠졌는지 검사)는 선택 사항이다.
 
@@ -222,7 +237,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 57개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 60개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 27케이스에서 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동 · CI 수동 잡(사용량 소모) |
 | 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 실행되지 못한 런(한도·샌드박스 거부·인증 실패)은 점수에서 뺀다 — 세면 "아무 일도 없음"이 가짜 만점이 된다. 기준 미만이거나 유효 런이 없는 케이스가 있으면 exit 1 | eval 뒤 |

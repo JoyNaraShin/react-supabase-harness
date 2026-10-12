@@ -19,8 +19,8 @@
 - 그 외(리서치·general-purpose 등)는 프롬프트에 **출력 파일 경로**가 **저장 지시와 같은
   절에** 있어야 통과("save … to <경로>", "<경로> 에 저장"). 읽을 문서 경로 옆에 "report"가
   있는 것은 산출 지시가 아니다.
-- 출력 파일명이 `REPORT|SUMMARY|FINDINGS|ANALYSIS*.md` 면 deny — Claude Code 가 서브에이전트의
-  그런 이름의 .md 저장을 거부하므로, 지시가 있어도 결과가 파일로 남지 않는다.
+- 출력 파일명이 `REPORT|SUMMARY|FINDINGS|ANALYSIS*.md` 면 deny — 서브에이전트가 그런 이름의 .md 를
+  만들지 말라는 플랫폼 지침과 충돌해, 지시가 있어도 결과가 파일로 남지 않을 수 있다(실측).
 
 우회: 프롬프트에 면제 토큰을 포함하면 통과. 사용자가 명시 승인한 예외에만 쓴다 —
 메인 세션이 스스로 붙이는 것은 규정 위반이다. 토큰은 README 에만 적고 거부 메시지에는 싣지
@@ -28,7 +28,11 @@
 """
 import json
 import re
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scope  # noqa: E402
 
 BYPASS = "[HARNESS: 파일산출 면제]"
 
@@ -71,6 +75,8 @@ def main() -> None:
         data = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
+    if not scope.applies("require-agent-output-file", scope.project_root(data)):
+        sys.exit(0)
 
     if data.get("tool_name") not in ("Agent", "Task"):
         sys.exit(0)
@@ -87,8 +93,8 @@ def main() -> None:
     bad = [t for t in targets if REPORT_NAME.search(t)]
     if bad:
         deny(
-            f"출력 파일명 `{bad[0]}` 은 저장되지 않는다 — Claude Code 는 서브에이전트가 "
-            "REPORT·SUMMARY·FINDINGS·ANALYSIS 로 시작하는 .md 를 쓰는 것을 거부한다.\n"
+            f"출력 파일명 `{bad[0]}` 은 저장되지 않을 수 있다 — 서브에이전트가 REPORT·SUMMARY·FINDINGS·ANALYSIS "
+            "로 시작하는 .md 를 만들지 말라는 플랫폼 지침과 충돌한다.\n"
             "다음 행동: `<주제>-ledger.md`·`<주제>-notes.md` 처럼 다른 이름으로 바꿔 다시 스폰하라."
         )
     if targets:

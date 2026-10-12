@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # (뮤턴트 id, 파일, 함수명 또는 None, 끼워 넣을 return 값 또는 (old, new) 치환)
 MUTANTS = [
     ("pkgRef-never", "gate-engine.py", "p_pkg_ref", "None"),
+    ("scope-applies-always", "scope.py", "applies", "True"),
+    ("scope-kind-never-harness", "scope.py", "kind", "'other'"),
+    ("scope-root-none", "scope.py", "project_root", "None"),
     ("bash-writes-none", "gate-engine.py", "_bash_writes", "[]"),
     ("spec-names-plain", "gate-engine.py", "_spec_names", "[spec]"),
     ("introduced-deps-never", "gate-engine.py", "_introduced_deps", "None"),
