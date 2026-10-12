@@ -9,7 +9,6 @@
 SessionStart 훅(hooks/install-rm-guard.py)이 이 디렉터리를 PATH 앞에 둔다. 재귀 삭제(-r·-R·--recursive)만
 판정하고, 위험하지 않으면 진짜 rm 을 그대로 실행한다.
 """
-import importlib.util
 import os
 import sys
 
@@ -17,11 +16,12 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 ROOT = os.path.dirname(HERE)
 
 
-def _guard():
-    spec = importlib.util.spec_from_file_location("bdg", os.path.join(ROOT, "hooks", "block-destructive-git.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _policy():
+    """정적 가드와 같은 정책(hooks/rmpolicy.py). 재귀 삭제를 판정할 때만 불러온다 — 불러오기가 깨져도
+    재귀가 아닌 rm 은 그대로 돈다."""
+    sys.path.insert(0, os.path.join(ROOT, "hooks"))
+    import rmpolicy
+    return rmpolicy
 
 
 def real_rm() -> str:
@@ -60,66 +60,32 @@ def parse(args: list):
     return recursive, targets
 
 
-# macOS 의 /tmp·/var·/etc 는 /private/… 로의 링크다 — 실제 경로를 그대로 재면 `/tmp/x` 정리까지 막힌다
-_PRIVATE = ("/private/tmp", "/private/var", "/private/etc")
-
-
-def _unprivate(p: str) -> str:
-    for pre in _PRIVATE:
-        if p == pre or p.startswith(pre + "/"):
-            return p[len("/private"):]
-    return p
-
-
-def why_dangerous(target: str, cwd: str, home: str, guard) -> str:
-    """위험하면 이유, 아니면 빈 문자열."""
-    if not target:
-        return ""
-    base = os.path.basename(target.rstrip("/"))
-    if target.rstrip("/") and base in (".", ".."):
-        return ""                                        # POSIX rm 은 마지막 요소가 `.`·`..` 인 대상을 거부한다
-    lexical = os.path.normpath(os.path.join(cwd, target))
-    # 대상 자신이 링크면 rm 은 링크만 지운다 — 링크를 푸는 건 부모 경로까지(끝의 `/` 는 링크를 따라간다)
-    if target.endswith("/"):
-        resolved = os.path.realpath(lexical)
-    else:
-        resolved = os.path.join(os.path.realpath(os.path.dirname(lexical)), os.path.basename(lexical))
-    real_cwd, real_home = os.path.realpath(cwd), os.path.realpath(home) if home else ""
-    proj = os.environ.get("HARNESS_PROJECT_DIR", "")
-    projects = [proj, _unprivate(os.path.realpath(proj))] if proj else []
-    for p, c, h in ((lexical, cwd, home), (_unprivate(resolved), _unprivate(real_cwd), _unprivate(real_home))):
-        if p == "/" or guard.dangerous_root(p):
-            return f"{p} 는 시스템·홈 최상위 경로다"
-        if h and (p == h or h.startswith(p.rstrip("/") + "/") or os.path.dirname(p) == h):
-            return f"{p} 는 홈, 홈의 상위, 또는 홈 바로 아래 폴더다"
-        if c == p or c.startswith(p.rstrip("/") + "/"):
-            return f"{p} 는 현재 작업 위치이거나 그 상위다"
-        for proj in projects:                            # 세션의 프로젝트 — `cd ..` 뒤에도 지키는 기준점
-            if proj == p or proj.startswith(p.rstrip("/") + "/"):
-                return f"{p} 는 이 세션의 프로젝트 폴더이거나 그 상위다"
-        if os.path.basename(p) == ".git":
-            return f"{p} 는 git 저장소 자체다"
-    return ""
+def why_dangerous(target: str, cwd: str, home: str):
+    """위험하면 (이유 코드, 문구), 아니면 None. 판정은 hooks/rmpolicy.py — 프로젝트는 SessionStart 가 적은 값."""
+    return _policy().runtime(target, cwd, home, os.environ.get("HARNESS_PROJECT_DIR", ""))
 
 
 def main(argv: list) -> int:
     recursive, targets = parse(argv)
     if recursive:
         try:
-            guard = _guard()
             cwd = os.getcwd()
             home = os.environ.get("HOME", "")
-            bad = [(t, r) for t in targets for r in [why_dangerous(t, cwd, home, guard)] if r]
+            bad = [(t, r) for t in targets for r in [why_dangerous(t, cwd, home)] if r]
         except Exception as e:                           # 판정을 못 하면 재귀 삭제는 하지 않는다(fail closed)
-            bad = [("?", f"판정 실패: {e}")]
+            bad = [("?", ("system", f"판정 실패: {e}"))]
         if bad:
-            t, r = bad[0]
+            t, (code, r) = bad[0]
+            try:
+                pol = _policy()
+                nxt = f"{pol.NEXT.get(code, pol.NEXT['system'])} {pol.USER_RUN}"
+            except Exception:
+                nxt = "대상을 깊은 절대 경로로 다시 확인하라. 사용자가 의도한 삭제라면 사용자가 직접 `! /bin/rm -r …` 로 실행한다."
             sys.stderr.write(
                 f"[react-supabase-harness] rm -r 차단 — 실제 대상 `{t}`: {r}.\n"
                 "왜: 실행 시점 가드는 bash 가 해석을 끝낸 실제 인자를 본다(변수가 비었거나 경로가 위로 올라간 경우).\n"
-                "다음 행동: 대상을 깊은 절대 경로로 다시 확인하라. 사용자가 의도한 삭제라면 사용자가 직접 "
-                "`! /bin/rm -r …` 로 실행한다(절대 경로 호출은 이 래퍼를 지나지 않고, 에이전트의 호출은 "
-                "정적 가드가 따로 검사한다).\n")
+                f"다음 행동: {nxt}"
+                "(절대 경로 호출은 이 래퍼를 지나지 않고, 에이전트의 호출은 정적 가드가 따로 검사한다).\n")
             return 1
     rm = real_rm()
     os.execv(rm, [rm] + argv)

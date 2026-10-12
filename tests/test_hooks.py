@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -346,11 +347,11 @@ class DestructiveGitTest(unittest.TestCase):
                 self.assertTrue(denied(self.check(c)))
 
     def test_rm_boundary(self):
-        # 깊은 경로 정리는 일상이다 / 변수만 있는 경로·.git·-f 없는 -r
+        # 깊은 경로 정리는 일상이다 / 변수만 있는 경로·-f 없는 -r (`.git` 은 RmPolicyTest — 세션 프로젝트 기준)
         for c in ["rm -rf /tmp/build-x", "rm -rf /Users/me/proj/dist", "rm -rf ~/.cache/tool/x"]:
             with self.subTest(c=c):
                 self.assertIsNone(self.check(c))
-        for c in ['rm -rf "$DIR"/', "rm -rf $PWD", "rm -rf .git", "rm -r ~", "rm -rf ~/Projects",
+        for c in ['rm -rf "$DIR"/', "rm -rf $PWD", "rm -r ~", "rm -rf ~/Projects",
                   "rm -rf /Users/me"]:
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
@@ -1862,6 +1863,56 @@ class RuntimeRmGuardInstallTest(unittest.TestCase):
             out = subprocess.run(["bash", "-c", f". {env_file}; command -v rm"], capture_output=True, text=True).stdout
             self.assertEqual(out.strip(), os.path.join(str(ROOT), "bin", "rm"))
 
+    def test_stale_wrapper_lines_from_other_versions_are_dropped(self):
+        # 실측: 재개한 세션에 옛 버전(0.36.1)이 다른 env 파일에 남긴 줄이 나중에 실행되어 새 래퍼를 가렸다
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d, "cache", "react-supabase-harness")
+            for v in ("0.36.1", "0.38.0"):
+                (cache / v / "bin").mkdir(parents=True)
+                shutil.copy(ROOT / "bin" / "rm", cache / v / "bin" / "rm")
+                (cache / v / ".claude-plugin").mkdir()
+                (cache / v / ".claude-plugin" / "plugin.json").write_text('{"name": "react-supabase-harness"}')
+            other = Path(d, "cache", "other-plugin", "1.0", "bin")
+            other.mkdir(parents=True)
+            sess = Path(d, "session-env")
+            sess.mkdir()
+            old = f'export PATH={cache / "0.36.1" / "bin"}:"$PATH"\n'
+            keep = f'export PATH={other}:"$PATH"\nexport FOO=1\n'
+            (sess / "sessionstart-hook-5.sh").write_text(old)
+            (sess / "sessionstart-hook-7.sh").write_text(old + keep)
+            new = str(cache / "0.38.0")
+            run_hook("install-rm-guard.py", {"cwd": d},
+                     env={"CLAUDE_ENV_FILE": str(sess / "sessionstart-hook-5.sh"), "CLAUDE_PLUGIN_ROOT": new})
+            self.assertNotIn("0.36.1", (sess / "sessionstart-hook-7.sh").read_text())
+            self.assertIn(keep, (sess / "sessionstart-hook-7.sh").read_text())        # 남의 줄은 그대로
+            src = "; ".join(f". {p}" for p in sorted(sess.glob("*.sh")))
+            out = subprocess.run(["bash", "-c", f"{src}; command -v rm"], capture_output=True, text=True).stdout
+            self.assertEqual(out.strip(), str(cache / "0.38.0" / "bin" / "rm"))
+
+    def test_stale_line_cleanup_spares_dev_checkouts_and_handles_broken_manifests(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d, "cache", "mkt", "react-supabase-harness")
+            (cache / "0.30.0" / "bin").mkdir(parents=True)                   # plugin.json 이 깨진 옛 버전
+            (cache / "0.30.0" / ".claude-plugin").mkdir()
+            (cache / "0.30.0" / ".claude-plugin" / "plugin.json").write_text("{broken")
+            dev = Path(d, "Projects", "react-supabase-harness")              # 개발 설치(현재)
+            fork = Path(d, "Projects", "harness-fork")                       # 같은 폴더의 다른 체크아웃
+            for p in (dev, fork):
+                (p / "bin").mkdir(parents=True)
+                shutil.copy(ROOT / "bin" / "rm", p / "bin" / "rm")
+                (p / ".claude-plugin").mkdir()
+                (p / ".claude-plugin" / "plugin.json").write_text('{"name": "react-supabase-harness"}')
+            sess = Path(d, "session-env")
+            sess.mkdir()
+            old = f'export PATH={cache / "0.30.0" / "bin"}:"$PATH"\n'
+            forkline = f'export PATH={fork / "bin"}:"$PATH"\n'
+            (sess / "sessionstart-hook-3.sh").write_text(old + forkline)
+            run_hook("install-rm-guard.py", {"cwd": d},
+                     env={"CLAUDE_ENV_FILE": str(sess / "sessionstart-hook-9.sh"), "CLAUDE_PLUGIN_ROOT": str(dev)})
+            text = (sess / "sessionstart-hook-3.sh").read_text()
+            self.assertNotIn("0.30.0", text)
+            self.assertIn(forkline, text)
+
     def test_session_start_without_env_file_is_a_no_op(self):
         self.assertIsNone(run_hook("install-rm-guard.py", {"cwd": "/tmp"}))
 
@@ -2045,3 +2096,173 @@ class ScopeTest(unittest.TestCase):
         self.assertTrue(denied(write("hooks/new.py")))
         self.assertTrue(denied(write("tests/test_new.py")))
         self.assertIsNone(write("docs/notes.md"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# rm 정책(hooks/rmpolicy.py) — 정적 가드와 실행 시점 가드가 같은 대상을 같은 이유로 막는다
+# ─────────────────────────────────────────────────────────────────────────────
+def _rmpolicy():
+    spec = importlib.util.spec_from_file_location("rmpolicy", HOOKS / "rmpolicy.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class RmPolicyTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(os.path.realpath(self.tmp.name))
+        self.home = base / "home"
+        self.home.mkdir()
+        self.box = base / "box" / "deep"                         # 깊은 경로 — 시스템·홈 판정에 걸리지 않게
+        self.proj = self.box / "proj"
+        self.sib = self.box / "sibling"
+        for r in (self.proj, self.sib):
+            r.mkdir(parents=True)
+            _git(str(r), "init", "-q", "-b", "main")
+            Path(r, "a.txt").write_text("a\n")
+            _git(str(r), "add", "-A")
+            _git(str(r), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+        self.rec = base / "rec.sh"
+        self.rec.write_text("#!/bin/sh\nexit 0\n")
+        self.rec.chmod(0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def static(self, cmd, cwd, project=None):
+        return run_hook("block-destructive-git.py", {"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": cmd}},
+                        env={"CLAUDE_PROJECT_DIR": str(project or self.proj), "HOME": str(self.home)}, cwd=str(cwd))
+
+    def runtime(self, args, cwd, project=None):
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "HARNESS_REAL_RM": str(self.rec),
+               "HARNESS_PROJECT_DIR": str(project or self.proj)}
+        return subprocess.run([sys.executable, str(ROOT / "bin" / "rm"), *args], cwd=str(cwd), env=env,
+                              capture_output=True, text=True)
+
+    def both(self, target, cwd, project=None):
+        """(정적 차단 여부, 실행 시점 차단 여부)"""
+        st = denied(self.static(f"rm -rf {target}", cwd, project))
+        rt = self.runtime(["-rf", target], cwd, project).returncode == 1
+        return st, rt
+
+    def test_session_project_git_dir_is_protected_in_both_layers(self):
+        for target, cwd in [(".git", self.proj), ("./.git/", self.proj), (str(self.proj / ".git"), self.sib),
+                            ("../proj/.git", self.sib)]:
+            with self.subTest(target=target, cwd=cwd.name):
+                self.assertEqual(self.both(target, cwd), (True, True))
+
+    def test_other_repos_git_dir_is_not_protected(self):
+        # D3 — 세션 프로젝트의 저장소만 지킨다. 다른 레포의 .git 은 막지 않는다(README 에 적힌 한계)
+        for target, cwd in [(".git", self.sib), (str(self.sib / ".git"), self.proj)]:
+            with self.subTest(target=target, cwd=cwd.name):
+                self.assertEqual(self.both(target, cwd), (False, False))
+
+    def test_project_and_its_parents_are_protected_from_anywhere(self):
+        for target in (str(self.proj), str(self.box)):
+            with self.subTest(target=target):
+                self.assertEqual(self.both(target, self.sib), (True, True))
+        self.assertEqual(self.both(str(self.proj / "dist"), self.sib), (False, False))   # 프로젝트 안 정리는 일상
+
+    def test_monorepo_subproject_protects_the_enclosing_repo(self):
+        sub = self.proj / "apps" / "web"
+        sub.mkdir(parents=True)
+        self.assertEqual(self.both(str(self.proj / ".git"), self.sib, project=sub), (True, True))
+
+    def test_worktree_protects_its_git_file_and_the_common_dir(self):
+        wt = self.box / "wt"
+        _git(str(self.proj), "worktree", "add", "-q", str(wt), "-b", "w")
+        for target in (str(wt / ".git"), str(self.proj / ".git"), str(self.proj / ".git" / "worktrees" / "wt")):
+            with self.subTest(target=target):
+                self.assertEqual(self.both(target, self.sib, project=wt), (True, True))
+
+    def test_block_messages_carry_the_same_next_action(self):
+        out = self.static("rm -rf .git", self.proj)
+        r = self.runtime(["-rf", ".git"], self.proj)
+        for text in (reason(out), r.stderr):
+            self.assertIn("다음 행동", text)
+            self.assertIn("git 저장소", text)
+
+    def test_aliases_of_the_same_target_are_caught_by_identity(self):
+        # 0.39.0 검증(High 회귀): macOS 는 대소문자를 무시하고 realpath 도 그것을 모으지 않아 문자열 비교가 뚫렸다
+        probe = self.proj / "CaseProbe"
+        probe.mkdir()
+        if not (self.proj / "caseprobe").exists():
+            self.skipTest("대소문자를 구분하는 파일시스템")
+        up = Path(str(self.proj).replace("/proj", "/PROJ"))
+        for target, cwd in [(str(up / ".git"), self.sib), (".GIT", self.proj), (str(self.proj / ".Git"), self.sib),
+                            (str(up), self.sib)]:
+            with self.subTest(target=target):
+                self.assertEqual(self.both(target, cwd), (True, True))
+
+    def test_git_dir_protection_does_not_depend_on_git(self):
+        # 0.39.0 검증(Medium 회귀): git 호출이 실패하면(git 없음·GIT_DIR·타임아웃) 보호가 열렸다 — 이제 git 을 부르지 않는다
+        env = {"PATH": "/nonexistent", "HOME": str(self.home), "HARNESS_REAL_RM": str(self.rec),
+               "HARNESS_PROJECT_DIR": str(self.proj), "GIT_DIR": str(self.sib / ".git")}
+        r = subprocess.run([sys.executable, str(ROOT / "bin" / "rm"), "-rf", ".git"], cwd=str(self.proj), env=env,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        del env["HARNESS_PROJECT_DIR"]                      # 세션 프로젝트를 모르면 지금 위치의 저장소를 지킨다
+        r = subprocess.run([sys.executable, str(ROOT / "bin" / "rm"), "-rf", ".git"], cwd=str(self.proj), env=env,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stderr)
+
+    def test_containers_and_insides_of_the_git_dir_are_protected(self):
+        wt = self.box / "wt2"
+        _git(str(self.proj), "worktree", "add", "-q", str(wt), "-b", "w2")
+        # 워크트리 세션에서 메인 체크아웃(공용 .git 을 품음)을 지우면 저장소가 사라진다
+        self.assertEqual(self.both(str(self.proj), self.sib, project=wt), (True, True))
+        self.assertEqual(self.both(str(self.proj / ".git" / "objects"), self.sib), (True, True))
+        sep = self.box / "sepwork"
+        store = self.box / "store"
+        store.mkdir()
+        _git(str(self.box), "init", "-q", "--separate-git-dir", str(store / "s.git"), str(sep))
+        self.assertEqual(self.both(str(store), self.sib, project=sep), (True, True))
+
+    def test_static_layer_resolves_home_user_and_globs(self):
+        home_proj = self.home / "Projects" / "p"
+        home_proj.mkdir(parents=True)
+        _git(str(home_proj), "init", "-q")
+        for cmd in ["rm -rf $HOME/Projects/p", "rm -rf ${HOME}/Projects/p/.git", "rm -rf .gi?", "rm -rf ./.g*",
+                    f"rm -rf {home_proj}"]:
+            with self.subTest(cmd=cmd):
+                self.assertTrue(denied(self.static(cmd, home_proj, project=home_proj)))
+        user = os.path.basename(os.path.expanduser("~"))
+        self.assertTrue(denied(self.static(f"rm -rf ~{user}", self.sib)))
+        sub = self.proj / "src"
+        sub.mkdir()
+        self.assertTrue(denied(self.static(f"rm -rf {sub}", sub)))           # cwd 자신을 절대 경로로
+        self.assertIsNone(self.static("rm -rf .gi?", self.sib))              # 형제 레포는 D3 대로 통과
+
+    def test_static_glob_expansion_is_capped(self):
+        # 0.39.0 재검증(N1): 글롭 펼침에 상한이 없어 깊은 글롭 하나로 훅이 수십 초 걸렸다
+        many = self.box / "many"
+        many.mkdir()
+        for i in range(2005):
+            (many / f"f{i}").write_text("")
+        out = self.static(f"rm -rf {many}/*", self.sib)
+        self.assertTrue(denied(out))
+        self.assertIn("판정할 수 없다", reason(out))
+        self.assertIsNone(self.static(f"rm -rf {many}/f1*", self.sib))           # 상한 안은 그대로 판정
+
+    def test_system_tops_are_measured_by_identity_too(self):
+        pol = _rmpolicy()
+        if not os.path.isdir("/System/Volumes/Data/opt"):
+            self.skipTest("macOS 데이터 볼륨이 없다")
+        for p in ("/System/Volumes/Data", "/System/Volumes/Data/opt", "/System/Volumes/Data/usr/local"):
+            with self.subTest(p=p):
+                self.assertEqual((pol.why(p) or ("",))[0], "system")
+        self.assertEqual((pol.why("/private/var/folders") or ("",))[0], "system")
+        self.assertIsNone(pol.why(str(self.box / "x")))
+
+    def test_escaped_braces_in_recursive_rm_are_not_guessed(self):
+        # 차분 퍼즈(시드 4242): 토크나이저가 `\{` 의 백슬래시를 지워 `{,\{/../}~` 를 bash(→ `~`)와 다르게 펼쳤다(0.38.0 부터)
+        out = self.static("rm -rf \\\n{,\\{/../}~", self.sib)
+        self.assertTrue(denied(out))
+        self.assertIn("다음 행동", reason(out))
+        self.assertIsNone(self.static("rm -rf build/{a,b}", self.sib))          # 이스케이프 없는 중괄호는 그대로 판정
+
+    def test_wrapper_smoke(self):
+        self.assertEqual(self.runtime(["-r", str(self.box / "tmpx")], self.sib).returncode, 0)
+        self.assertEqual(self.runtime(["-r", str(self.home)], self.sib).returncode, 1)
+        self.assertEqual(self.runtime(["notes.txt"], self.proj).returncode, 0)        # 재귀가 아니면 판정 없음

@@ -32,6 +32,8 @@ Bypass: a sub-command whose first token is `CLAUDE_COMMIT_APPROVED=1` followed b
 `git commit` (emitted by the `/commit` skill after user approval) bypasses the
 git-commit block ONLY — every other destructive op stays blocked even with it.
 """
+import glob
+import itertools
 import json
 import os
 import re
@@ -39,7 +41,10 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rmpolicy  # noqa: E402
+import scope  # noqa: E402
 import shellparse  # noqa: E402
+from rmpolicy import SYSTEM_TOP, dangerous_root  # noqa: E402,F401
 
 ENV_PREFIX = re.compile(r"^[A-Za-z_]\w*=")
 SHORT_C = re.compile(r"^-[a-z]*c$")
@@ -234,67 +239,41 @@ def unwrap(tokens: list) -> list:
     return tokens
 
 
-SYSTEM_TOP = {"/", "/usr", "/etc", "/bin", "/sbin", "/lib", "/opt", "/var", "/System", "/Library",
-              "/Applications", "/Users", "/home", "/root", "/private", "/Volumes", "/mnt", "/srv", "/tmp"}
-
-
-def dangerous_root(t: str) -> bool:
-    """A path whose recursive deletion is never a routine cleanup.
-
-    Deep paths (`/tmp/build-x`, `/Users/me/proj/dist`, `~/.cache/tool/x`) are routine and
-    pass. What stays blocked: system tops and their direct children, a home
-    directory and its top-level folders (`~/Projects`), anything outside the project
-    (`../x`), the cwd itself, `.git`, and a bare variable that may expand to empty
-    (`"$DIR"/`, `$PWD`, `$(pwd)`).
-    """
-    t = t.strip("'\"")
-    if re.fullmatch(r"(\$\{?\w+\}?|\$\(\s*pwd\s*\)|`pwd`)[/*]*", t):
-        return True
-    # 디렉터리 스택 틸드: `~+` = cwd, `~-`·`~N` = 이전·스택 위치(알 수 없음) — 생성형 차분 테스트가 찾음
-    if re.match(r"~[+-]?\d*(?:/|$)", t) and t[:2] in ("~+", "~-") or re.match(r"~\d", t):
-        if t.startswith("~+"):
-            t = "." + t[2:]
-        else:
-            return True
-    # `..` 는 경로를 위로 올린다 — `/tmp/a/../..` 는 `/`, `x/..` 는 cwd 다(0.35.0 까지 통과하던 구멍).
-    if ".." in t.split("/") and not t.startswith("$"):
-        if t.startswith("~"):                                # `~/a/../..` — 홈 기준으로 푼다
-            rest = os.path.normpath(t[2:] or ".") if t.startswith("~/") else None
-            if rest is None or rest == ".." or rest.startswith("../"):
-                return True                                  # 홈 위로 올라간다
-            t = "~" if rest == "." else "~/" + rest
-        else:
-            n = os.path.normpath(t)
-            if not t.startswith("/") and (n == "." or n == ".." or n.startswith("../")):
-                return True
-            t = n
-    # `.`·`//` 도 정규화한다 — `/./x`·`~/./Projects`·`.//*` 가 깊이 판정을 속였다(문자 퍼즈가 찾음)
-    if not t.startswith("$"):
-        if t.startswith("~/"):
-            t = "~/" + os.path.normpath(t[2:]) if os.path.normpath(t[2:]) != "." else "~"
-        elif not t.startswith("~"):
-            t = os.path.normpath(t) if t else t
-    t = t.rstrip("/") or "/"
-    if t in (".", "..", "*", "./*", ".git", "./.git", "~", "~/*", "$HOME", "${HOME}",
-             "$HOME/*", "${HOME}/*") or re.fullmatch(r"(\.\./)*\.\.(/\*)?", t):
-        return True
-    if re.match(r"(~|\$HOME|\$\{HOME\})/[^/]+/?\*?$", t):
-        return True                                  # ~/Projects — a whole top-level folder
-    if t.startswith("../"):
-        return True                                  # outside the project root
-    if t.startswith("/"):
-        parts = [p for p in t.split("/") if p and p != "*"]
-        if t.rstrip("*").rstrip("/") in SYSTEM_TOP or len(parts) <= 1:
-            return True
-        if "/" + parts[0] in {"/Users", "/home"}:
-            return len(parts) <= 3                   # /Users/me, /Users/me/Projects
-        return "/" + parts[0] in SYSTEM_TOP and parts[0] != "tmp" and len(parts) <= 2  # /usr/local
-    return False
-
-
 # 이 하위 명령이 실행될 때 있을 수 있는 위치들 — 원래 cwd 기준 상대 경로("."), 절대 경로, `~…`, 모르면 None.
 HERE = [["."]]
 CMD = [""]
+# 세션 맥락 — main() 이 훅 입력으로 채운다. 프로젝트·.git 보호는 실행 시점 가드와 같은 정책(rmpolicy.why)이다.
+CTX = {"cwd": os.getcwd(), "home": os.environ.get("HOME", ""), "project": os.environ.get("CLAUDE_PROJECT_DIR", "")}
+
+
+GLOB_CAP = 2000    # 글롭이 펼칠 대상 상한 — 넘으면 판정 불가로 막는다(대상마다 stat ≈0.17ms, 깊은 글롭은 수십 초, 0.39.0 검증).
+                   # 200 은 node_modules/* 같은 일상 정리를 막았다
+
+
+class TooMany(Exception):
+    pass
+
+
+def _absolutes(c: str) -> list:
+    """정적 후보를 실제로 가리킬 절대 경로들로. `$HOME`·`~user`·글롭은 펼친다. 다른 변수처럼 값을 모르면 빈 목록
+    (그 판정은 dangerous_root·rm_candidates 몫). 끝의 `/` 는 rm 처럼 링크를 따라간다."""
+    home = CTX["home"]
+    c = re.sub(r"^\$(?:HOME|\{HOME\})(?=/|$)", lambda m: home or m.group(0), c)
+    if "$" in c or "`" in c:
+        return []
+    if c.startswith("~"):
+        e = os.path.expanduser(c) if not (c == "~" or c.startswith("~/")) else (home + c[1:] if home else c)
+        if e.startswith("~"):
+            return []
+        c = e
+    a = c if c.startswith("/") else os.path.join(CTX["cwd"], c)
+    if glob.has_magic(a):
+        hits = list(itertools.islice(glob.iglob(a), GLOB_CAP + 1))
+        if len(hits) > GLOB_CAP:
+            raise TooMany(c)                             # 다 보지 못하면 모르는 것 — 훅이 느려지지 않게 끊는다
+    else:
+        hits = [a]
+    return [os.path.realpath(h) if c.endswith("/") else os.path.normpath(h) for h in hits]
 
 
 def _join(here: str, t: str) -> str:
@@ -459,6 +438,11 @@ def check(tokens: list):
         has_r = "--recursive" in flags or has_short_flag(flags, "r") or has_short_flag(flags, "R")
         has_f = "--force" in flags or has_short_flag(flags, "f")
         if has_r:  # -f 유무와 무관 — `rm -r ~` 도 같은 결과다
+            # 토크나이저가 `\{` 의 백슬래시를 지워 중괄호 펼침을 bash 와 다르게 읽는다(`{,\{/../}~` → bash 는 `~`).
+            # 이스케이프된 중괄호·쉼표는 실사용에 드물다 — 판정하지 않고 막는다(근본 수정은 셸 해석 단일화, 차분 퍼즈가 찾음)
+            if re.search(r"\\[{},]", CMD[0]):
+                return ("rm -r 명령에 이스케이프된 중괄호·쉼표(`\\{`·`\\}`·`\\,`)가 있어 bash 가 펼칠 대상을 판정할 수 없다. "
+                        "다음 행동: 이스케이프 없이 리터럴 절대 경로로 지정하라.")
             for t in targets:
                 cands = rm_candidates(t)
                 if None in cands:
@@ -466,7 +450,17 @@ def check(tokens: list):
                             "앞선 cd 의 목적지를 모른다(명령 치환·변수). "
                             "다음 행동: 리터럴 절대 경로로 지정하라(예: rm -rf /abs/path/dist).")
                 if any(dangerous_root(c) for c in cands):
-                    return "rm -r on system/home/cwd/parent/.git path 금지. 사용자 승인 필요."
+                    return "rm -r on system/home/cwd/parent path 금지. 사용자 승인 필요."
+                for c in cands:
+                    try:
+                        found = _absolutes(c)
+                    except TooMany:
+                        return (f"rm -r 의 글롭 `{c}` 이 {GLOB_CAP}개를 넘게 펼쳐져 실제 대상을 다 판정할 수 없다. "
+                                "다음 행동: 지울 경로를 좁혀 리터럴 절대 경로나 짧은 글롭으로 지정하라.")
+                    for a in found:
+                        r = rmpolicy.why(a, CTX["home"], CTX["project"], CTX["cwd"])
+                        if r:
+                            return f"rm -r 대상 `{a}`: {r[1]}. 다음 행동: {rmpolicy.NEXT[r[0]]} {rmpolicy.USER_RUN}."
         return None
 
     if head == "find":
@@ -621,6 +615,8 @@ def main() -> None:
     except Exception:
         sys.exit(0)
     cmd = (data.get("tool_input") or {}).get("command") or ""
+    root = scope.project_root(data)
+    CTX.update(cwd=str(data.get("cwd") or os.getcwd()), project=str(root) if root else "")
     try:
         reason = scan(cmd)
     except Exception:  # an internal bug must not silently open the gate

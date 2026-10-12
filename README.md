@@ -59,6 +59,7 @@
 - **스택 준수 신호는 문자열 패턴이다.** `stack-compliance-guard` 는 `../../` import·컴포넌트 CSS import·`useEffect`+fetch 같은 우회 흔적을 알리기만 한다. 오탐 여지가 있어 차단하지 않는다.
 - **룰 술어와 위임 판정에 남긴 우회.** 목록에 없는 유사 UI 라이브러리는 `no-ui-library` 가 모른다. 실행 뒤 결과 검사는 커밋된 `package.json`(HEAD)과 비교하므로 git 이 아닌 프로젝트에서는 설치 명령 표기만 본다. 셸로 만든 코드의 `plan-first` 는 쓰기 대상이 명령에 드러나는 형태(heredoc·리다이렉트·`cp`·`sed -i` 등)만 본다 — 스크립트·인터프리터 안의 쓰기는 통과한다. 서브에이전트 사후 diff 는 백그라운드로 메인 세션과 동시에 돌면 그 사이 메인·사용자의 변경이 섞이고, 되돌리지 않고 보고만 시킨다(사용자 편집을 지우지 않기 위해). 같은 하위 명령 안에 쓰기 동사와 보호 경로 언급이 따로 있으면 읽기여도 막히는 과차단이 일부 남았다(예: `rm -f .claude/state/edit-count.json`).
 - **파괴적 명령 파서에 재현된 구멍이 남아 있다.** v0.32.0 적대 리뷰에서 우회(별칭·축약 옵션·경로 표기 변형 등)와 과차단(정상 명령이 막히는 경우)을 합쳐 20건 남짓 재현했다. 파서를 더 조이는 대신 v0.33.0 에서 결과 쪽 안전망을 붙였다 — `snapshot-guard` 가 읽기 전용으로 확인되지 않은 명령 직전마다 작업 트리를 스냅샷으로 남기고(어떤 표기로 지웠든 복구 가능), `pre-push` 훅이 기본 브랜치 강제 갱신·원격 ref 삭제를 표기와 무관하게 막는다. 스냅샷은 gitignore 대상, 미추적 비밀 파일(`.env`·`.env.*`(예시 파일 제외)·`*.pem`·`*.key`·`*.p12`·`*.pfx`·`id_rsa*` 등 이름 전체 일치)·5MB 넘는 미추적 파일, 레포 밖 파일을 보호하지 않고(제외 대상이 명령 뒤 사라지면 "복구 불가"로 알린다), 이미 추적 중인 비밀 파일은 그대로 담는다. 0.38.0 이전 스냅샷은 `scripts/purge-snapshots.py`(기본 dry-run)로 지울 수 있다. `pre-push` 는 사용자가 설치해야 한다(`scripts/install-git-hooks.sh`). 파싱이 실패하면 차단 쪽으로 기우므로 따옴표가 복잡한 정상 명령이 막힐 수 있다. 막힌 경우 메시지가 비파괴 대안과 사용자 직접 실행(`! <명령>`)을 안내한다.
+- **`rm -r` 의 `.git` 보호는 세션 프로젝트의 저장소만이다.** 다른 레포(형제 레포·스크래치 레포)의 `.git` 은 막지 않고, 스냅샷도 `.git` 을 되돌리지 못한다. `find -delete` 는 프로젝트·`.git` 기준을 아직 쓰지 않는다.
 - **관할은 세션 프로젝트로 판정한다.** 관할 레포의 세션에서 다른 레포를 고쳐도 T1 이 돌고, 비관할 레포의 세션에서 관할 레포를 고치면 돌지 않는다. 서브에이전트가 `isolation: worktree` 로 돌 때 위임 차단의 코드 영역은 세션 루트 기준이라 워크트리 경로의 쓰기는 영역 밖으로 본다(0.37.0 이전부터 같은 한계).
 - **측정 범위.** 서브에이전트의 툴 호출에도 PreToolUse 훅이 발동하고 입력에 `agent_id` 가 실린다는 전제(`block-impl-delegation`)는 공식 훅 문서와 eval(서브에이전트의 `src/` 쓰기가 실제로 막힘)로 확인했다. `settings.json` 의 `env` 값이 훅 프로세스에 전달되는지는 확인하지 않았다. eval 은 dontAsk 권한 모드의 샌드박스에서 돌아서, 사람이 승인 프롬프트를 보는 대화형 세션과 동작이 다를 수 있다.
 
@@ -69,7 +70,7 @@
 | 훅 | 이벤트 | 하는 일 | 동작 방식 |
 |---|---|---|---|
 | `snapshot-guard` | PreToolUse · PostToolUse · Bash | 읽기 전용으로 확인되지 않은 명령 직전에 작업 트리(미추적 포함·gitignore 제외, 미추적 비밀 파일·5MB 초과 제외)를 `refs/harness/snapshots/` 에 남긴다. 커밋 메시지에는 명령 원문 대신 해시만 적는다. 같은 트리면 새로 만들지 않고 최근 30개만 보존. 프로젝트의 저장소에만 쓴다. 명령이 끝나면 스냅샷 대비 사라진 파일을 결과로 찾아 복구 명령과 함께 알린다 — 스크립트 안의 `git clean` 처럼 명령 문자열에 드러나지 않는 삭제도 잡는다 | 차단하지 않음 · 알림 · 1,300 파일 레포에서 250–450ms |
-| `block-destructive-git` | PreToolUse · Bash | 직접 `git commit`·강제 push·`push --delete/--mirror/--no-verify`·`reset --hard`·`clean -f`·`branch -D`·작업 폐기 checkout/restore·이력 재작성, 시스템 최상위·홈 직속·상위(`../`)·현재 디렉터리·변수만 있는 경로의 `rm -r`·`find -delete` 차단(홈 아래 다른 프로젝트처럼 깊은 절대경로는 막지 않는다). `env`·`sudo`·`nohup` 같은 런처 접두어, 여러 줄 명령, `do`/`then` 복합문, `bash -c`·`eval`·셸이 읽는 heredoc 안도 검사 | **차단** · 파싱 실패·내부 오류 시 fail-closed. 커밋은 `/commit` 승인 경로만 통과하고, 훅이 기록한 마지막 verify 가 지금 HEAD 위 FAIL 이면 그것도 막는다 |
+| `block-destructive-git` | PreToolUse · Bash | 직접 `git commit`·강제 push·`push --delete/--mirror/--no-verify`·`reset --hard`·`clean -f`·`branch -D`·작업 폐기 checkout/restore·이력 재작성, 시스템 최상위·홈 직속·상위(`../`)·현재 디렉터리·변수만 있는 경로·세션 프로젝트와 그 상위·세션 프로젝트 저장소의 `.git` 의 `rm -r`, 그리고 앞의 위험 경로(프로젝트·`.git` 제외)의 `find -delete` 차단(홈 아래 다른 프로젝트처럼 깊은 절대경로는 막지 않는다). `env`·`sudo`·`nohup` 같은 런처 접두어, 여러 줄 명령, `do`/`then` 복합문, `bash -c`·`eval`·셸이 읽는 heredoc 안도 검사 | **차단** · 파싱 실패·내부 오류 시 fail-closed. 커밋은 `/commit` 승인 경로만 통과하고, 훅이 기록한 마지막 verify 가 지금 HEAD 위 FAIL 이면 그것도 막는다 |
 | `gate-engine` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash, PostToolUse · Bash | `gates/rules.jsonc` + 프로젝트 `.claude/gates/rules.jsonc` 룰 집행. 룰의 `after` 에 든 도구는 실행 뒤 결과(예: `package.json` 에 새로 들어온 금지 의존성)로 다시 본다. 에이전트가 탈출구 파일·룰 파일을 스스로 만들거나 바꾸는 것은 코드로 차단 | **차단/알림** · 룰마다 탈출구(사용자가 켠다) |
 | `block-impl-delegation` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash (서브에이전트 호출만) | 서브에이전트가 코드 영역(`src/`·`supabase/`·`package.json` 등, 데이터로 정의)을 쓰려는 호출 차단. 리서치 산출·plan 작성·기계 실행은 통과 | **차단** · 사용자가 `delegation.writers` 에 넣은 타입만 예외 |
 | `subagent-audit` | SubagentStart · SubagentStop | 시작 시 스냅샷, 끝날 때 코드 영역이 바뀌었으면(포매터·생성기·설치 포함) 한 번 세워 최종 보고에 목록을 싣게 한다. 하네스 verifier·리뷰어의 판정을 `.claude/state/verdicts.jsonl` 에 훅이 기록 | **피드백**(1회) · 되돌리지 않음 |
@@ -79,7 +80,7 @@
 | `security-nudge` | PostToolUse · Edit/Write | 인증·마이그레이션·`supabase.*`·`.env*` 편집 시 `/review-stability` 권고 | 알림 · 같은 파일 1회 |
 | `workflow-entry-guard` | PostToolUse · Write | 플랜 없이 첫 `src/` 코드를 만들면 워크플로 규정 주입 | 알림 · 프로젝트당 1회 |
 | `stack-compliance-guard` | PostToolUse · Edit/Write | Tailwind·`@/*` alias·TanStack Query 미사용 신호 적출 | 알림 · 프로젝트당 1회 |
-| `install-rm-guard` | SessionStart | 실행 시점 rm 가드(`bin/rm`)를 이 세션 Bash 의 PATH 앞에 둔다(`CLAUDE_ENV_FILE`). 래퍼는 bash 가 변수·따옴표·이어쓰기·중괄호 확장을 다 끝낸 **실제 인자**로 `rm -r` 을 판정한다 — 시스템·홈 최상위, 홈의 상위, 현재 위치·세션 프로젝트와 그 상위, `.git`. 대상 끝의 `/` 가 링크를 따라갈 때만 링크를 푼다. `rm`·`\rm`·`command rm`·`xargs`/`find -exec` 의 rm 이 지나고, `/bin/rm` 처럼 경로를 직접 쓴 호출은 정적 가드 몫이다 | **차단**(rm 종료 코드 1 + 다음 행동) · 판정 실패 시 fail-closed · 의도한 삭제는 사용자가 `! /bin/rm -r …` |
+| `install-rm-guard` | SessionStart | 실행 시점 rm 가드(`bin/rm`)를 이 세션 Bash 의 PATH 앞에 둔다(`CLAUDE_ENV_FILE`). 래퍼는 bash 가 변수·따옴표·이어쓰기·중괄호 확장을 다 끝낸 **실제 인자**로 `rm -r` 을 판정한다 — 시스템·홈 최상위, 홈의 상위, 현재 위치·세션 프로젝트와 그 상위, 세션 프로젝트 저장소의 `.git`(작업 트리의 `.git`·git dir·공통 dir 과 그 안쪽·그것을 품은 상위, 대소문자·firmlink 별칭은 파일 신원으로 비교). 대상 끝의 `/` 가 링크를 따라갈 때만 링크를 푼다. 무엇을 지키는가는 정적 가드와 같은 정책 모듈(`hooks/rmpolicy.py`)이 정한다. 새 세션마다 옛 버전이 남긴 PATH 줄을 지워 업데이트 뒤에도 새 래퍼가 앞에 온다. `rm`·`\rm`·`command rm`·`xargs`/`find -exec` 의 rm 이 지나고, `/bin/rm` 처럼 경로를 직접 쓴 호출은 정적 가드 몫이다 | **차단**(rm 종료 코드 1 + 다음 행동) · 판정 실패 시 fail-closed · 의도한 삭제는 사용자가 `! /bin/rm -r …` |
 | `session-start-summary` | SessionStart | 브랜치·Phase·미커밋 3줄 요약(관할만) · 커밋 승인이 자기 신고 상태면 알림(모든 레포) | 알림 · git 읽기만 |
 | `harness-boarding-guard` | SessionStart | 하네스 관할 프로젝트인데 탑승 절차가 빠졌으면 적출 | 알림 |
 | `review-protocol` | UserPromptSubmit | 리뷰·감사 요청을 감지하면 리뷰 프로토콜 주입 | 알림 · "리뷰 테이블"처럼 엔티티 이름이거나 리뷰 결과 반영 요청이면 침묵 |
@@ -237,7 +238,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 62개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 67개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 27케이스에서 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동 · CI 수동 잡(사용량 소모) |
 | 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 실행되지 못한 런(한도·샌드박스 거부·인증 실패)은 점수에서 뺀다 — 세면 "아무 일도 없음"이 가짜 만점이 된다. 기준 미만이거나 유효 런이 없는 케이스가 있으면 exit 1 | eval 뒤 |
