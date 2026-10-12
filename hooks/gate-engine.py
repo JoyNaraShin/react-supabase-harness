@@ -87,7 +87,10 @@ def _bash_writes(ctx) -> list:
                 for t in exp:
                     t = os.path.expanduser(t)
                     if here == shellparse.UNKNOWN and not os.path.isabs(t):
-                        continue                         # 위치를 모르는 상대 경로 — 판정 건너뜀(절대 경로는 본다)
+                        # 위치를 모르는(`cd "$X"`·`cd -`) 상대 경로 = 모르는 대상 — 0.39.0 과 같다. 건너뛰면 plan-first 를
+                        # 한 줄로 끌 수 있었다(0.40.0 커밋 보안 리뷰)
+                        out.append((UNKNOWN_WRITE, verb))
+                        continue
                     p = os.path.normpath(os.path.join(here, t))
                     if os.path.realpath(p).startswith(base + os.sep):
                         out.append((p.replace("\\", "/"), verb))

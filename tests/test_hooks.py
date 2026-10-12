@@ -2332,10 +2332,20 @@ class ShellParseUnifiedTest(_RepoCase):
         sh = f"bash <<'EOF'\ncat > src/new.ts <<'X'\n{self.BIG}\nX\nEOF"
         self.assertTrue(denied(self.gate("Bash", {"command": sh})))
 
-    def test_unknown_cwd_skips_relative_but_not_absolute_targets(self):
+    def test_unknown_cwd_relative_target_is_judged_not_skipped(self):
+        # 0.40.0 첫 구현은 위치 모르는 상대 경로를 건너뛰어 `cd "$X" && …` 한 줄로 plan-first·위임 차단을 껐다(커밋 보안
+        # 리뷰 — 0.39.0 대비 회귀). plan-first 는 모르는 대상으로, 위임 차단은 시작 위치 기준으로 본다
         mark_harness(self.proj)
-        self.assertIsNone(self.gate("Bash", {"command": f"cd $X && cat > new.ts <<'EOF'\n{self.BIG}\nEOF"}))
-        self.assertTrue(denied(self.gate("Bash", {"command": f"cd $X && cat > {self.proj}/src/new.ts <<'EOF'\n{self.BIG}\nEOF"})))
+        for c in [f"cd $X && cat > new.ts <<'EOF'\n{self.BIG}\nEOF", f"cd - && cat > new.ts <<'EOF'\n{self.BIG}\nEOF",
+                  f"cd $X && cat > {self.proj}/src/new.ts <<'EOF'\n{self.BIG}\nEOF"]:
+            with self.subTest(c=c[:30]):
+                self.assertTrue(denied(self.gate("Bash", {"command": c})))
+        for c in ['cd "$X" && cat > src/a.ts', "popd; rm -rf src/a", "pushd +1 && cp x src/a.ts", 'git -C "$X" checkout develop']:
+            with self.subTest(c=c):
+                out = run_hook("block-impl-delegation.py", {"tool_name": "Bash", "agent_type": "general-purpose", "agent_id": "a1",
+                                                            "cwd": self.proj, "tool_input": {"command": c}},
+                               env={"CLAUDE_PROJECT_DIR": self.proj})
+                self.assertTrue(denied(out))
 
     def test_source_counts_only_at_command_position(self):
         la = self.sp.leading_assignments

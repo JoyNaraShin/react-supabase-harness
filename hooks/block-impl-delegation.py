@@ -119,8 +119,8 @@ def git_tree_write(seg: str, cwd: str, root: Path) -> bool:
     for d in dirs:
         d = os.path.expanduser(d)
         repo = d if os.path.isabs(d) else os.path.join(repo, d)
-    if i < 0 or repo.startswith(shellparse.UNKNOWN) or not inside(Path(repo), root):
-        return False                                  # 다른 저장소, 또는 위치를 모른다(판정 건너뜀)
+    if i < 0 or not inside(Path(repo), root):
+        return False                                  # 다른 저장소
     sub = toks[i]
     if sub == "stash":
         return len(toks) == i + 1 or toks[i + 1] not in GIT_STASH_READ
@@ -169,13 +169,16 @@ def main() -> None:
     elif tool == "Bash":
         cmd = str(ti.get("command") or "")
         # 셸 전용 — python heredoc 본문의 문자열 "rm -rf src" 는 셸 명령이 아니다
-        for seg, here in shellparse.segments(cmd, str(data.get("cwd") or root), shell_only=True):
+        start = str(data.get("cwd") or root)
+        for seg, here in shellparse.segments(cmd, start, shell_only=True):
+            if here == shellparse.UNKNOWN:
+                # 위치를 모르면(`cd "$X"`·`cd -`·`popd`) 시작 위치 기준으로 본다 — 0.39.0 과 같다. 건너뛰면 한 줄로
+                # 판정을 끌 수 있었다(0.40.0 커밋 보안 리뷰). 대가: `cd "$(mktemp -d)" && touch src/x` 도 막는다
+                here = start
             if git_tree_write(seg, here, root):
                 deny(message(agent, "git 작업 트리 변경"))
             for t in shellparse.write_targets(seg, cmd):
                 t = os.path.expanduser(t)
-                if not os.path.isabs(t) and here == shellparse.UNKNOWN:
-                    continue                          # 위치를 모르는 상대 경로 — 판정 건너뜀
                 hit = in_code_zone(t if os.path.isabs(t) else os.path.join(here, t), root, policy["codeZone"])
                 if hit:
                     deny(message(agent, hit))
