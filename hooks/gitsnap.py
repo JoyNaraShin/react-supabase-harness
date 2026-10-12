@@ -6,10 +6,15 @@
 
 방식: 실제 인덱스를 임시 파일로 복사(stat 캐시를 살려 바뀐 파일만 해시)한 뒤 `git add -A` → `write-tree`.
 미추적 파일은 포함하고 gitignore 대상(node_modules·.env 등)은 빠진다. HEAD·실제 인덱스·작업 트리는
-건드리지 않는다. 결과는 `refs/harness/snapshots/<epoch_ms>` (브랜치가 아니라 일반 push 에 실리지 않는다).
+건드리지 않는다.
+
+프라이버시: 미추적 파일 중 비밀 파일 이름(SECRET_NAMES — 이름 전체 일치, 부분 일치는 코드 파일을 삼킨다)과
+BIG_BYTES 를 넘는 파일은 스냅샷에 넣지 않는다. 제외한 경로는 호출자에게 돌려줘 사후 알림에 쓴다 — 제외 대상은
+복구되지 않는다. 이미 추적 중인 파일은 빼지 않는다(이미 이력에 있고, 빼면 스냅샷이 삭제로 보인다). 결과는 `refs/harness/snapshots/<epoch_ms>` (브랜치가 아니라 일반 push 에 실리지 않는다).
 모든 실패는 None — 훅은 fail-open 이다.
 """
 from __future__ import annotations
+import fnmatch
 import os
 import shutil
 import subprocess
@@ -18,6 +23,10 @@ import time
 REF_PREFIX = "refs/harness/snapshots/"
 KEEP = 30           # 보존할 스냅샷 수 — 넘치면 오래된 것부터 ref 를 지운다(객체는 git gc 가 회수)
 TIMEOUT = 8         # 초. 거대한 미추적 파일 등으로 느려지면 스냅샷을 포기한다(작업을 세우지 않는다)
+BIG_BYTES = 5 * 1024 * 1024
+SECRET_NAMES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*", "id_ecdsa*",
+                "credentials.json", "service-account*.json")
+SECRET_OK = (".env.example", ".env.sample", ".env.template")
 
 
 def _git(repo: str, *args, env=None, timeout=TIMEOUT):
@@ -33,8 +42,32 @@ def repo_root(cwd: str):
     return _git(cwd, "rev-parse", "--show-toplevel")
 
 
-def worktree_tree(repo: str):
-    """지금 작업 트리(미추적 포함, ignore 제외)의 tree 객체 sha."""
+def is_secret_name(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name not in SECRET_OK and any(fnmatch.fnmatchcase(name, g) for g in SECRET_NAMES)
+
+
+def excluded_untracked(repo: str) -> list:
+    """스냅샷에서 뺄 미추적 파일 [(경로, 바이트)] — 비밀 파일 이름이거나 BIG_BYTES 초과."""
+    out = _git(repo, "ls-files", "-o", "--exclude-standard", "-z")
+    if out is None:
+        return []
+    hits = []
+    for p in out.split("\0"):
+        if not p:
+            continue
+        try:
+            size = os.lstat(os.path.join(repo, p)).st_size
+        except OSError:
+            continue
+        if is_secret_name(p) or size > BIG_BYTES:
+            hits.append((p, size))
+    return hits
+
+
+def worktree_tree(repo: str, excluded=None):
+    """지금 작업 트리(미추적 포함, ignore 제외, 비밀·대용량 미추적 제외)의 tree 객체 sha.
+    excluded 에 리스트를 넘기면 뺀 [(경로, 바이트)] 를 채운다."""
     gd = _git(repo, "rev-parse", "--absolute-git-dir")
     if not gd:
         return None
@@ -47,7 +80,11 @@ def worktree_tree(repo: str):
         env.pop("GIT_DIR", None)
         if not os.path.isfile(tmp) and _git(repo, "rev-parse", "-q", "--verify", "HEAD"):
             _git(repo, "read-tree", "HEAD", env=env)
-        if _git(repo, "add", "-A", env=env) is None:
+        skip = excluded_untracked(repo)
+        if excluded is not None:
+            excluded.extend(skip)
+        spec = ["--", "."] + [f":(exclude,literal){p}" for p, _ in skip] if skip else []
+        if _git(repo, "add", "-A", *spec, env=env) is None:
             return None
         return _git(repo, "write-tree", env=env)
     finally:
@@ -65,9 +102,10 @@ def latest(repo: str):
     return out, _git(repo, "rev-parse", out + "^{tree}")
 
 
-def snapshot(repo: str, message: str = "harness snapshot"):
-    """스냅샷 commit sha. 트리가 직전 스냅샷과 같으면 새로 만들지 않고 직전 것을 돌려준다."""
-    tree = worktree_tree(repo)
+def snapshot(repo: str, message: str = "harness snapshot", excluded=None):
+    """스냅샷 commit sha. 트리가 직전 스냅샷과 같으면 새로 만들지 않고 직전 것을 돌려준다.
+    excluded 는 worktree_tree 와 같다(제외한 미추적 파일)."""
+    tree = worktree_tree(repo, excluded)
     if not tree:
         return None
     prev = latest(repo)

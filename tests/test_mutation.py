@@ -37,6 +37,8 @@ MUTANTS = [
     ("command-regex-always", "gate-engine.py", "p_command_regex", "(True, 'x')"),
     ("snapshot-post-noop", "snapshot-guard.py", "post", "None"),
     ("snapshot-never", "gitsnap.py", "snapshot", "None"),
+    ("snapshot-secret-never", "gitsnap.py", "is_secret_name", "False"),
+    ("snapshot-exclude-none", "gitsnap.py", "excluded_untracked", "[]"),
     ("expand-command-noop", "shellparse.py", "expand_command", "cmd"),
     ("rm-candidates-literal", "block-destructive-git.py", "rm_candidates", "[t]"),
     ("track-cd-never", "block-destructive-git.py", "track_cd", "False"),

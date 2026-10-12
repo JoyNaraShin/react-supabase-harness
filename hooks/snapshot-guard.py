@@ -14,7 +14,10 @@
 트리와 비교해 사라진 경로를 복구 명령과 함께 알린다 — `./reset.sh` 안의 `git clean` 처럼 명령 문자열로는
 삭제가 안 보이는 경우를 결과로 잡는다.
 
-한계: gitignore 대상(.env·로컬 데이터)과 레포 밖 파일은 보호하지 않는다. 원격 이력은 pre-push 훅
+프라이버시: 스냅샷 커밋 메시지에는 명령 원문 대신 해시만 적는다. 미추적 비밀 파일(.env·*.pem 등)과 5MB 넘는
+미추적 파일은 스냅샷에 넣지 않고(hooks/gitsnap.py), 그 이름·크기만 표식에 남겨 명령 뒤 사라졌으면 "복구 불가"를 알린다.
+
+한계: gitignore 대상(.env·로컬 데이터)·스냅샷 제외 대상·레포 밖 파일은 보호하지 않는다. 원격 이력은 pre-push 훅
 (scripts/install-git-hooks.sh)이 맡는다.
 """
 import hashlib
@@ -95,13 +98,15 @@ def _key(cmd: str) -> str:
 def pre(cmd: str, repos: list) -> None:
     shas = []
     for r in repos:
-        sha = gitsnap.snapshot(r, "harness snapshot before: " + cmd[:200])
+        skipped = []
+        sha = gitsnap.snapshot(r, "harness snapshot before command " + _key(cmd)[:12], skipped)
         m = _marker(r)
         if sha and m:
             shas.append(sha)
             try:
                 with open(m, "w") as fh:
-                    json.dump({"sha": sha, "key": _key(cmd), "ts": time.time()}, fh)
+                    json.dump({"sha": sha, "key": _key(cmd), "ts": time.time(),
+                               "excluded": [[p, n] for p, n in skipped[:200]]}, fh)
             except OSError:
                 pass
     if shas and LOSSY.search(shellparse.prep(cmd)):
@@ -127,6 +132,10 @@ def post(cmd: str, repos: list) -> None:
             continue
         if rec.get("key") != _key(cmd) or time.time() - rec.get("ts", 0) > 900:
             continue
+        lost = [p for p, _ in rec.get("excluded") or [] if not os.path.lexists(os.path.join(r, p))]
+        if lost:
+            listing = ", ".join(f"`{p}`" for p in lost[:10]) + (f" 외 {len(lost) - 10}개" if len(lost) > 10 else "")
+            notes.append(f"{os.path.basename(r)}: {listing} — **복구 불가**(비밀 파일·5MB 초과라 스냅샷에서 뺐다)")
         now = gitsnap.worktree_tree(r)
         before = gitsnap._git(r, "rev-parse", rec["sha"] + "^{tree}")
         if not now or not before or now == before:
@@ -141,7 +150,8 @@ def post(cmd: str, repos: list) -> None:
             "additionalContext": (
                 "방금 명령 뒤에 실행 직전 스냅샷에 있던 파일이 사라졌다(하네스 스냅샷 대비):\n" + "\n".join(notes)
                 + "\n의도한 삭제였더라도 사라진 파일 목록과 위 복구 명령을 답변에 적어 사용자에게 알린다(미추적 파일은"
-                  " 이 스냅샷 말고는 사본이 없다). 사용자가 원하지 않은 삭제가 분명하면 바로 되살린다."),
+                  " 이 스냅샷 말고는 사본이 없고, '복구 불가' 항목은 그 사본도 없다). 사용자가 원하지 않은 삭제가 분명하면"
+                  " 바로 되살린다."),
         }}, ensure_ascii=False))
 
 

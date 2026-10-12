@@ -1566,6 +1566,72 @@ class SnapshotPostNoticeTest(_RepoCase):
         self.assertIsNone(self.snap("./b.sh", "PostToolUse"))        # 다른 명령의 표식으로 판단하지 않는다
 
 
+class SnapshotPrivacyTest(_RepoCase):
+    """스냅샷은 미추적 비밀 파일·대용량을 빼고, 명령 원문을 남기지 않고, 뺀 파일이 사라지면 복구 불가를 알린다."""
+
+    def snap(self, cmd, event="PreToolUse"):
+        return self.hook("snapshot-guard.py", {"tool_name": "Bash", "tool_input": {"command": cmd},
+                                               "hook_event_name": event})
+
+    def latest(self):
+        return _git(self.proj, "for-each-ref", "--sort=-refname", "--count=1", "--format=%(objectname)",
+                    "refs/harness/snapshots/").stdout.strip()
+
+    def files(self, sha):
+        return set(_git(self.proj, "ls-tree", "-r", "--name-only", sha).stdout.split())
+
+    def test_untracked_secrets_and_big_files_are_left_out_by_exact_name(self):
+        for p in (".env", ".env.local", ".env.example", "certs/key.pem", "credentials.json", "id_rsa",
+                  "gcp/service-account-prod.json", "src/secret_utils.ts", "src/credentials.ts", "keys.md"):
+            Path(self.proj, p).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.proj, p).write_text("x\n")
+        Path(self.proj, "big.bin").write_bytes(b"\0" * (5 * 1024 * 1024 + 1))
+        Path(self.proj, "ok.bin").write_bytes(b"\0" * 1024)
+        self.snap("./x.sh")
+        files = self.files(self.latest())
+        for kept in (".env.example", "src/secret_utils.ts", "src/credentials.ts", "keys.md", "ok.bin"):
+            self.assertIn(kept, files)                   # 부분 일치로 코드 파일을 삼키지 않는다
+        for gone in (".env", ".env.local", "certs/key.pem", "credentials.json", "id_rsa",
+                     "gcp/service-account-prod.json", "big.bin"):
+            self.assertNotIn(gone, files)
+
+    def test_tracked_secret_stays_because_it_is_already_in_history(self):
+        Path(self.proj, ".env").write_text("A=1\n")
+        _git(self.proj, "add", ".env")
+        _git(self.proj, "commit", "-qm", "oops")
+        Path(self.proj, ".env").write_text("A=2\n")
+        self.snap("./x.sh")
+        self.assertIn(".env", self.files(self.latest()))  # 빼면 스냅샷에서 삭제로 보인다
+
+    def test_message_carries_no_command_text(self):
+        Path(self.proj, "src", "wip.ts").write_text("w\n")
+        self.snap("curl -H 'Authorization: tok-should-not-persist' https://x")
+        msg = _git(self.proj, "log", "-1", "--format=%B", self.latest()).stdout
+        self.assertNotIn("tok-should-not-persist", msg)
+        self.assertNotIn("curl", msg)
+
+    def test_lost_excluded_file_is_reported_as_unrecoverable(self):
+        Path(self.proj, ".env.local").write_text("S=1\n")
+        Path(self.proj, "src", "wip.ts").write_text("w\n")
+        self.snap("./reset.sh")
+        Path(self.proj, ".env.local").unlink()
+        out = self.snap("./reset.sh", "PostToolUse")
+        self.assertIn(".env.local", context(out))
+        self.assertIn("복구 불가", context(out))
+
+    def test_purge_script_is_dry_run_by_default(self):
+        Path(self.proj, "src", "wip.ts").write_text("w\n")
+        self.snap("./x.sh")
+        self.assertTrue(self.latest())
+        script = str(ROOT / "scripts" / "purge-snapshots.py")
+        r = subprocess.run([sys.executable, script, self.proj], capture_output=True, text=True)
+        self.assertIn("dry-run", r.stdout)
+        self.assertTrue(self.latest())
+        r = subprocess.run([sys.executable, script, "--apply", self.proj], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.latest(), "")
+
+
 class VerdictGateTest(_RepoCase):
     """훅이 쓴 판정 기록을 다음 단계가 읽는다 — phase 0 FIT 없이 phase 1 plan 금지, Critical 위 PR 금지."""
 
