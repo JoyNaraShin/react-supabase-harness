@@ -14,7 +14,28 @@ import re
 SHELLS = r"(?:bash|sh|zsh|dash|ash|eval)"
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 _FEEDS_SHELL = re.compile(r"(?:^|[\s|(])(?:\S*/)?(?:bash|sh|zsh|dash|ash|python3?|node|ruby|perl)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b")
-LAUNCHERS = {"sudo", "doas", "env", "nohup", "time", "command", "builtin", "exec", "nice", "xargs", "stdbuf"}
+# 남은 인자를 명령으로 실행하는 런처. 값 = 따로 값을 받는 옵션(그 값을 프로그램으로 읽지 않게).
+# 게이트마다 따로 두던 표(파괴 가드·정정 게이트·plan-first·설치 판정)를 여기 하나로 모았다(0.40.0) —
+# 같은 명령을 게이트마다 다르게 읽었다(`env -u X gh pr create` 를 파괴 가드는 gh 로, plan-first 는 -u 로).
+LAUNCHERS = {
+    "env": {"-u", "--unset", "-C", "--chdir"},
+    "command": set(), "builtin": set(), "exec": {"-a"}, "nohup": set(),
+    "time": {"-f", "--format", "-o", "--output"},
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
+             "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type"},
+    "doas": {"-u", "-C"},
+    "nice": {"-n", "--adjustment"},
+    "stdbuf": {"-i", "-o", "-e"},
+    "xargs": {"-I", "-L", "-n", "-P", "-d", "-E", "-s", "-a", "--arg-file",
+              "--delimiter", "--max-args", "--max-procs", "--replace"},
+}
+# 첫 위치 인자가 프로그램이 아닌 런처(timeout DURATION cmd).
+LEADING_POSITIONAL = {"timeout": {"-s", "--signal", "-k", "--kill-after"}}
+# 명령 앞에 오는 셸 문법어: `while read b; do git branch -D "$b"; done` 의 `do` 뒤도 명령이다.
+SHELL_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "}", "!", "done", "fi", "esac"}
+ASSIGN_WORD = re.compile(r"^[A-Za-z_]\w*=")
+# git 의 값 받는 전역 옵션(git.c 기준) — `git -C dir status` 의 하위 명령은 dir 이 아니다.
+GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix"}
 DEST_LAST = {"cp", "install", "rsync", "ln"}
 ALL_ARGS = {"touch", "truncate", "tee", "rm", "unlink", "mkdir", "sponge", "mv", "rmdir", "shred"}
 IN_PLACE = {"sed", "perl", "awk", "gawk"}
@@ -24,19 +45,76 @@ REDIRECT = re.compile(r"(?<![0-9&<>-])>>?\|?\s*([^\s;&|<>()]+)|(?<![<>])[0-9]>>?
 _FEEDS_POSIX_SHELL = re.compile(r"(?:^|[\s|(])(?:\S*/)?(?:bash|sh|zsh|dash|ash)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b")
 
 
+def _quote_state(line: str, q):
+    """줄 끝의 따옴표 상태와, 따옴표 밖에서 시작하는 첫 heredoc 표식. 여러 줄 문자열은 다음 줄로 상태를 넘긴다.
+    q 는 문맥 스택(문자열이 아니라 튜플) — 큰따옴표 안의 `$(` 는 새 명령 문맥이라 그 안의 `<<'EOF'` 는 heredoc 이다
+    (커밋·PR 본문의 정형 `"$(cat <<'EOF' … EOF)"`)."""
+    st = list(q or ())
+    i, n, esc = 0, len(line), -2
+    found = None
+    while i < n:
+        c = line[i]
+        cur = st[-1] if st else None
+        if cur == "'":
+            if c == "'":
+                st.pop()
+            i += 1
+            continue
+        if cur == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if line.startswith("$(", i):
+                st.append("(")                           # 따옴표 안의 명령 치환 — 따옴표 밖처럼 읽는다
+                i += 2
+                continue
+            if c == '"':
+                st.pop()
+            i += 1
+            continue
+        if c == "\\":
+            esc = i + 1                                  # 이스케이프된 글자(`\ `)는 공백이 아니다 — 뒤 `#` 는 주석이 아니다
+            i += 2
+            continue
+        if c == ")" and cur == "(":
+            st.pop()
+            i += 1
+            continue
+        if c == "#" and (i == 0 or (line[i - 1] in " \t;&|(" and esc != i - 1)):
+            break                                        # 주석 — 그 안의 따옴표·`<<` 는 셸이 읽지 않는다
+        if found is None and line.startswith("<<", i):
+            m = _HEREDOC.match(line, i)
+            if m:
+                found = m
+                i = m.end()
+                continue
+        if line.startswith("$(", i):
+            st.append("(")
+            i += 2
+            continue
+        if c in "'\"":
+            st.append(c)
+        i += 1
+    return tuple(st), found
+
+
 def strip_heredoc_bodies(cmd: str, shell_only: bool = False) -> str:
     """데이터 heredoc 본문을 지운다(헤더 줄은 남겨 `cat > f <<EOF` 의 리다이렉트는 그대로 본다).
-    shell_only=True 면 셸이 읽는 본문만 남긴다 — python·node 본문은 실행되지만 셸 명령은 아니다."""
-    lines, out, i = cmd.split("\n"), [], 0
+    shell_only=True 면 셸이 읽는 본문만 남긴다 — python·node 본문은 실행되지만 셸 명령은 아니다.
+    따옴표 안의 `<<EOF`(`git commit -m "a <<EOF"`)는 heredoc 이 아니다 — 뒤의 줄을 본문으로 삼켜 명령을 숨겼다."""
+    lines, out, i, q = cmd.split("\n"), [], 0, ()
     while i < len(lines):
         line = lines[i]
         out.append(line)
-        m = _HEREDOC.search(line)
+        q, m = _quote_state(line, q)
         i += 1
-        if not m:
+        if not m:                                          # 표식은 따옴표 밖(또는 따옴표 안 `$(…)`)에서만 찾았다
             continue
         tag, body = m.group(2), []
-        while i < len(lines) and lines[i].strip() != tag:
+        dash = m.group(0).startswith("<<-")
+        # 종료 줄은 bash 처럼 정확히 표식만(`<<-` 면 앞 탭 허용) — `EOF ` 를 끝으로 읽으면 뒤 본문이 명령이 되고
+        # 그 안의 `'` 가 다음 줄들을 문자열로 덮었다
+        while i < len(lines) and (lines[i].lstrip("\t") if dash else lines[i]) != tag:
             body.append(lines[i])
             i += 1
         if (_FEEDS_POSIX_SHELL if shell_only else _FEEDS_SHELL).search(line):
@@ -50,22 +128,31 @@ def neutralize_quotes(cmd: str) -> str:
     """따옴표 안의 셸 메타문자를 공백으로 — 문자열 속 `a -> b`·`x | y` 는 리다이렉트·파이프가 아니다.
     `bash -c '…'`·`eval '…'` 의 인자는 실행되므로 그대로 펼친다."""
     out, i, n = [], 0, len(cmd)
+    esc = -2
     while i < n:
         ch = cmd[i]
         if ch == "\\" and i + 1 < n:
             out.append(cmd[i + 1])
+            esc = i + 1
             i += 2
             continue
+        if ch == "#" and (i == 0 or (cmd[i - 1] in " \t\n;&|(" and esc != i - 1)):
+            while i < n and cmd[i] != "\n":              # 주석은 실행되지 않는다 — 안의 `'`(`# it's`)를 따옴표로 읽으면
+                i += 1                                   # 뒤의 줄 전체가 문자열이 되어 사라졌다
+            continue
         if ch in "'\"":
-            j = cmd.find(ch, i + 1)
-            if j < 0:
-                j = n
+            j = i + 1                                    # 큰따옴표 안의 `\"` 는 닫는 따옴표가 아니다 — 뒤가 하위 명령으로 갈라졌다
+            while j < n and cmd[j] != ch:
+                j += 2 if ch == '"' and cmd[j] == "\\" else 1
+            j = min(j, n)
             inner = cmd[i + 1:j]
             before = "".join(out)
             if re.search(SHELLS + r"(?:\s+-\w+)*\s*$", before):
                 out.append(inner)
             else:
-                out.append(re.sub(r"[<>|;&]", " ", inner))
+                # 데이터 문자열 속 `#` 도 메타문자가 아니다 — `--body "fix #12" && rm -rf src` 의 `#` 를 주석으로 읽어
+                # 뒤의 rm 을 지웠다. 줄바꿈은 남긴다 — 따옴표 짝을 잘못 잡으면(`"$(echo '"')"`) 다음 줄 명령이 숨는다
+                out.append(re.sub(r"[<>|;&#]", " ", inner))
             i = j + 1
             continue
         out.append(ch)
@@ -75,7 +162,7 @@ def neutralize_quotes(cmd: str) -> str:
 
 def prep(cmd: str, shell_only: bool = False) -> str:
     text = neutralize_quotes(strip_heredoc_bodies(cmd, shell_only))
-    text = re.sub(r"(^|\s)#[^\n]*", r"\1", text)          # 주석은 실행되지 않는다
+    # 주석은 neutralize_quotes 가 따옴표·이스케이프를 알고 지운다(`a\ #b` 의 `#` 는 낱말 안 — 주석이 아니다)
     # fd 복제(`2>&1`·`>&-`)와 `&>`·`|&` 의 `&` 는 명령 구분자가 아니다 — `1` 이 명령으로 세어졌다
     text = re.sub(r"\d*[<>]&(?:\d+|-)", " ", text)
     text = re.sub(r"&>>?", ">", text).replace("|&", "|")
@@ -94,10 +181,123 @@ _STMT_SPLIT = re.compile(r"(&&|\|\||[;&|\n])")
 # for/select 변수 외의 전부다. 하나라도 있으면 아무 변수도 펼치지 않는다: eval·source·`.`(임의 코드),
 # read·mapfile·readarray·getopts·printf -v·declare·typeset·local·readonly·let·`((…))`·coproc(이름에 쓰기),
 # `${x:=…}`·`${x=…}`(펼치며 대입), `${!x}`·declare -n(간접 참조), IFS(낱말 분할), trap(나중에 실행되는 문자열).
+# eval 외의 `source`·`.` 는 명령 위치에서만 센다(`_sources`) — 인자 `.`(`git add .`)는 코드를 읽지 않는다.
 _BAIL = re.compile(
-    r"(?<![\w.-])(?:eval|source|read|mapfile|readarray|getopts|declare|typeset|local|readonly|let|coproc|trap|IFS)(?![\w-])"
-    r"|(?<![\w.-])printf(?:\s+-\S+)*\s+-v\b|\(\(|\$\{!|\$\{[A-Za-z_]\w*:?[=?]|(?:^|[\s;&|(])\.\s")
+    r"(?<![\w.-])(?:eval|read|mapfile|readarray|getopts|declare|typeset|local|readonly|let|coproc|trap|IFS|alias)(?![\w-])"
+    r"|(?<![\w.-])printf(?:\s+-\S+)*\s+-v\b|\(\(|\$\{!|\$\{[A-Za-z_]\w*:?[=?]")
 _SEQ = (None, ";", "\n", "&&")
+# 명령 조각 경계. `{`·`}` 는 낱말일 때만(`${S}` 는 쪼개지 않는다). `>|` 는 리다이렉트지 파이프가 아니다.
+_CMD_PIECES = re.compile(r"[;&|\n()`]|\$\(|(?:^|(?<=\s))[{}](?=\s|$)")
+# 명령 이름 찾기용 — `$(`·백틱에서 자르면 치환 머리(`$(printf '\\56') f`)가 사라진다. `(` 에서만 잘라 `$` 를 남긴다
+_HEAD_PIECES = re.compile(r"[;&|\n()]|(?:^|(?<=\s))[{}](?=\s|$)")
+# `.` 가 인자일 수 있는 조각의 첫 낱말 = 평범한 프로그램 이름. 아래는 뒤 낱말을 명령으로 넘길 수 있어 제외한다.
+_PLAIN_HEAD = re.compile(r"[A-Za-z_][\w.+-]*")
+_PASS_THROUGH = SHELL_KEYWORDS | {"command", "builtin", "time", "exec", "eval", "source", "coproc", "function",
+                                  "for", "case", "select", "in", "until", "while", "nohup", "env", "sudo", "doas",
+                                  "nice", "timeout", "stdbuf", "xargs"}
+
+
+def _is_source_word(w: str) -> bool:
+    """bash 가 이 낱말을 `.`/`source` 로 읽을 수 있는가 — 따옴표·백슬래시를 벗기고 중괄호를 펼친다(`{source,}`)."""
+    w = re.sub(r"[\"'\\]", "", w)
+    if w in (".", "source"):
+        return True
+    if "{" in w:
+        exp = brace_expand(w)
+        return exp is None or any(x in (".", "source") for x in exp)   # 다 펼치지 못하면 의심한다
+    return False
+
+
+def _sources(cmd: str) -> bool:
+    """`.`·`source` 가 현재 셸에서 코드를 읽을 수 있는가. 명령 위치를 하나씩 열거하는 방식은 두 번 뚫렸다
+    (리다이렉트 `2>&1 .`·옵션 `time -p .`·`command -- .` — 0.40.0 독립 검증). 그래서 뒤집는다: 낱말 `.`/`source` 가
+    있으면 의심하고, **조각의 첫 낱말이 평범한 프로그램 이름일 때만**(`git add .`·`ls .`) 인자로 인정한다.
+    따옴표·백슬래시는 bash 처럼 벗기고 중괄호는 펼친다(`"." f`·`\\source f`·`{source,} f`). 값이 `.`·`source` 인
+    대입(`X=source; $X f`)도 의심한다. 명령 이름이 변수·치환이면(`"$@"`·`$1`·`$X` — 값을 `printf '\\56'` 처럼 `.` 낱말
+    없이 만들 수 있다) 무조건 펼치지 않는다(독립 검증 2·3회차)."""
+    if re.search(r"(?:^|[\s;&|(])[A-Za-z_]\w*=(['\"]?)(?:\.|source)\1(?=[\s;&|)]|$)", cmd):
+        return True
+    pieces = _CMD_PIECES.split(cmd.replace(">|", "> "))
+    for piece in _HEAD_PIECES.split(cmd.replace(">|", "> ")):
+        ws, i = piece.split(), 0
+        while i < len(ws):                               # 머리 앞의 문법어·대입·옵션·리다이렉트를 건너뛴 명령 낱말
+            w = re.sub(r"[\"'\\]", "", ws[i])
+            if w in _PASS_THROUGH or ASSIGN_WORD.match(w) or w.startswith("-") or re.match(r"\d*[<>&]", w):
+                i += 2 if re.fullmatch(r"\d*(?:[<>]{1,2}|&>>?|>\|)", w) else 1
+                continue
+            if ws[i] not in ("[", "[[") and re.search(r"[$`*?\[]", ws[i]):
+                return True                              # 변수·치환·글롭이 명령 이름(`sourc?` 는 파일 `source` 로 펼쳐진다)
+            break
+    words = [w for w in re.split(r"[\s;&|()<>`]+", cmd) if w]
+    if any(_is_source_word(w) for w in words) and re.search(
+            r"\b[A-Za-z_][\w.-]*\s*\(\s*\)|(?:^|[\s;&|(])function\s|(?:^|[\s;&|(])set\s+(?:--?\s|[^-\s])", cmd):
+        return True                                      # 간접 실행: 함수·위치 매개변수(`set -- . x`·`set . x`)
+    for piece in pieces:
+        ws = piece.split()
+        if not any(_is_source_word(w) for w in ws):
+            continue
+        head = re.sub(r"[\"'\\]", "", ws[0])
+        if not _PLAIN_HEAD.fullmatch(head) or head in _PASS_THROUGH:
+            return True
+    return False
+
+
+def _strip_comments(text: str) -> str:
+    """따옴표 밖, 낱말 첫머리의 `#` 부터 줄 끝까지 지운다 — 주석 속 `'`(`# it's`)가 뒤 줄을 따옴표로 덮었다."""
+    out, q = [], None
+    for line in text.split("\n"):
+        i, n, cut, esc = 0, len(line), len(line), -2
+        while i < n:
+            c = line[i]
+            if q:
+                if c == "\\" and q == '"':
+                    i += 2
+                    continue
+                if c == q:
+                    q = None
+            elif c == "\\":
+                esc = i + 1
+                i += 2
+                continue
+            elif c in "'\"":
+                q = c
+            elif c == "#" and (i == 0 or (line[i - 1] in " \t;&|(" and esc != i - 1)):
+                cut = i
+                break
+            i += 1
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
+def _mask_data_quotes(text: str) -> str:
+    """공백·메타문자가 든 따옴표 문자열을 `_` 로 덮는다 — 산문 속 `(…). 다음` 이 명령 위치로 읽혔다.
+    `"."`·`"source"` 처럼 낱말 하나뿐인 따옴표는 남긴다(그것은 명령 이름이 될 수 있다)."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c == '"' and text[j] == "\\" else 1
+            inner = text[i + 1:j]
+            out.append(c + ("_" * len(inner) if re.search(r"[\s(){}`;&|<>#]", inner) else inner) + c)
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def bails(cmd: str) -> bool:
+    """이 명령 안에 변수 값을 바꾸거나 해석을 바꿀 수단이 있는가."""
+    # `.`·`source` 는 셸이 읽는 텍스트에서만 찾는다 — 데이터 heredoc·따옴표 속 산문(`…). 기간`)은 명령이 아니다
+    if _BAIL.search(cmd):
+        return True
+    return _sources(_mask_data_quotes(_strip_comments(strip_heredoc_bodies(cmd, shell_only=True))))
 
 
 def leading_assignments(cmd: str) -> dict:
@@ -109,7 +309,7 @@ def leading_assignments(cmd: str) -> dict:
     나오면(재대입·`for S`·`unset S`) — 실제 셸의 값과 달라질 수 있다(v0.35.1 우회, 2026-10-09).
     환경변수는 쓰지 않는다 — 훅 프로세스의 환경은 Bash 의 환경과 같다는 보장이 없다.
     이 근사가 맞는지는 tests/test_shell_differential.py 가 실제 bash 로 대조한다."""
-    if _BAIL.search(cmd):
+    if bails(cmd):
         return {}
     known, parts = {}, _STMT_SPLIT.split(cmd)
     op = None
@@ -160,7 +360,7 @@ def leading_assignments(cmd: str) -> dict:
 def is_tainted(name: str, cmd: str) -> bool:
     """이 명령 안에서 값이 바뀔 수 있는 변수인가 — 값을 바꾸는 수단이 있거나 이름이 `$NAME` 말고 다른 꼴로 나온다.
     그런 변수의 값은 환경값도 빈 값도 아닌 '아무 값'이다."""
-    if _BAIL.search(cmd):
+    if bails(cmd):
         return True
     bare = len(re.findall(r"(?<![\w$])" + re.escape(name) + r"\b", cmd))
     braced = len(re.findall(r"\$\{" + re.escape(name) + r"\b", cmd))
@@ -318,7 +518,7 @@ _SIMPLE_PARAM = re.compile(r"[A-Za-z_]\w*(?::?[-=?+][\w./:@%+=~-]*)?")
 UNKNOWN_PARAM = "${__harness_unknown__}"
 
 
-def collapse_params(cmd: str) -> str:
+def collapse_params(cmd: str, keep=frozenset()) -> str:
     """단순하지 않은 `${…}`(이름·`이름:-리터럴` 이 아닌 것)를 '모르는 변수' 하나로 접는다. bash 는 `${X: \\x2f,}`
     처럼 공백·연산자가 든 매개변수 확장도 한 단어로 다루는데, 토크나이저는 공백에서 쪼개 대상을 놓쳤다
     (문자 퍼즈가 찾음). 모르는 변수는 빈 값일 수 있는 것으로 판정된다 — 보수적."""
@@ -357,6 +557,12 @@ def collapse_params(cmd: str) -> str:
                     out.append("${!__harness_unknown__}")
                 elif m and m.group(3):
                     out.append("${" + m.group(2) + ":=__harness_unknown__}")
+                elif m and m.group(2) in keep and m.end() < len(body):
+                    # keep = 이 명령 안에서 값을 받는 변수(bound_names). 그 변수의 변형(`${S/x}`·`${S#x}`·`${S:1}`)은 값의 아무 조각이나
+                    # 될 수 있다 — `S=x/..; ${S/x}` 는 `/..`. 루트에서 시작하는 모르는 값으로 접은 후보를 파괴 가드가
+                    # 따로 본다. 모르는 변수 하나로만 접으면 `S=/; rm -rf ${S/x}usr` 가 `usr` 로 읽혔고(0.40.0 퍼즈),
+                    # `${S}` + 꼬리로만 접으면 접두를 깎는 `${S%/*}` 가 깊은 경로로 읽혔다(독립 검증 4회차 R4-1)
+                    out.append("/" + UNKNOWN_PARAM)
                 else:
                     out.append(UNKNOWN_PARAM)
                 i = j + 1
@@ -369,41 +575,139 @@ def collapse_params(cmd: str) -> str:
     return "".join(out)
 
 
-def canonical(cmd: str) -> str:
+_BINDS = re.compile(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?="
+                    r"|\b(?:for|select|read|mapfile|readarray|declare|typeset|local|export|readonly|printf\s+-v|getopts\s+\S+)"
+                    r"((?:\s+-\S+)*(?:\s+[A-Za-z_]\w*)+)")
+
+
+def bound_names(cmd: str) -> frozenset:
+    """이 명령 안에서 값을 받는 변수 이름 — 대입·`+=`·`for`·`read`·`printf -v`·`declare` 등(값이 확정됐는지는 묻지 않는다)."""
+    out = set()
+    for m in _BINDS.finditer(cmd):
+        out.add(m.group(1)) if m.group(1) else out.update(w for w in m.group(2).split() if not w.startswith("-"))
+    return frozenset(out)
+
+
+def canonical(cmd: str, keep=frozenset()) -> str:
     """판정용 사본 — bash 가 토큰을 나누기 전에 하는 변환을 먼저 한다: 이어쓰기 제거, `$'…'` 풀기, 복잡한 `${…}` 접기."""
-    return collapse_params(decode_ansi_quotes(join_continuations(cmd)))
+    return collapse_params(decode_ansi_quotes(join_continuations(cmd)), keep)
+
+
+# 위치를 모른다(`cd "$X"`·`cd -`·`popd`). None 이 아니라 문자열이다 — os.path.* 에 들어가도 TypeError 로 훅이 죽지 않는다.
+# 소비자마다 방향이 다르다: 파괴 가드는 막고, 스냅샷은 세션 프로젝트를 찍고, plan-first·위임은 상대 경로를 건너뛴다.
+UNKNOWN = "\0unknown-cwd"
+
+
+def _cd(seg: str, here: str, stack: list):
+    """`cd`·`pushd`·`popd` 면 새 위치, 아니면 None. stack = 이 명령 안에서 pushd 로 쌓은 위치(popd 가 돌아갈 곳)."""
+    toks = words(seg)
+    if toks and toks[0] == "builtin":
+        toks = toks[1:]
+    if not toks or toks[0] not in ("cd", "pushd", "popd"):
+        return None
+    args = [t for t in toks[1:] if not re.fullmatch(r"-[LPe@]+", t)]
+    if toks[0] == "popd":
+        return stack.pop() if stack and not args else UNKNOWN   # 이 명령 밖에서 쌓인 스택은 모른다
+    if toks[0] == "pushd" and (not args or re.fullmatch(r"[+-]\d*", args[0])):
+        stack.clear()
+        return UNKNOWN                                   # 스택 회전 — 알 수 없다
+    if args and here != UNKNOWN:                         # `$PWD` 는 지금 위치다 — `cd "$PWD"` 로 판정을 끄지 못하게
+        args[0] = re.sub(r"\$\{PWD\}|\$PWD(?!\w)", lambda _: here, args[0])
+    if len(args) > 1 or (args and (args[0] == "-" or re.search(r"[$`*?\[]", args[0]))):
+        new = UNKNOWN
+    else:
+        d = os.path.expanduser(args[0] if args else "~")
+        new = os.path.normpath(d) if os.path.isabs(d) else (
+            UNKNOWN if here == UNKNOWN else os.path.normpath(os.path.join(here, d)))
+    if toks[0] == "pushd":
+        stack.append(here)
+    return new
 
 
 def segments(cmd: str, cwd: str, shell_only: bool = False) -> list:
-    """(하위 명령, 그 시점의 cwd) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다.
-    확정된 변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다."""
-    out, here = [], cwd
+    """(하위 명령, 그 시점의 cwd 또는 UNKNOWN) 목록. `cd X` 는 뒤 하위 명령의 상대 경로 기준을 바꾼다.
+    확정된 변수는 펼친 뒤에 돌려준다 — `S=/tmp/x && cp a $S/b` 의 대상은 `$S/b`(프로젝트 안 상대 경로)가 아니다.
+    shell_only=True 면 인터프리터(python·node…) heredoc 본문을 명령으로 읽지 않는다 — 실행은 되지만 셸 명령이 아니다."""
+    out, here, stack = [], cwd, []
     cmd = canonical(cmd)
     cmd = expand_command(cmd, leading_assignments(cmd))
     for seg in re.split(r"[;&|\n]+", prep(cmd, shell_only).replace("(", " ").replace(")", " ")):
         seg = seg.strip()
         if not seg:
             continue
-        m = re.match(r"(?:builtin\s+)?cd\s+(\S+)\s*$", seg)
-        if m:
-            d = os.path.expanduser(m.group(1))
-            here = os.path.normpath(d if os.path.isabs(d) else os.path.join(here, d))
+        new = _cd(seg, here, stack)
+        if new is not None:
+            here = new
             continue
         out.append((seg, here))
     return out
 
 
-def _tokens(seg: str) -> list:
-    toks = [t for t in re.split(r"\s+", REDIRECT.sub(" ", seg).strip()) if t]
-    while toks:
+def words(seg: str) -> list:
+    """하위 명령의 낱말(리다이렉트 제외). 따옴표는 prep 이 이미 벗겼다."""
+    return [t for t in re.split(r"\s+", REDIRECT.sub(" ", seg).strip()) if t]
+
+
+def strip_launchers(toks: list, stop=frozenset()) -> list:
+    """대입·셸 문법어·런처를 벗겨 실제 프로그램을 맨 앞에(이름은 basename) 둔다. `stop` 의 런처는 벗기지 않는다
+    (정정 게이트는 `xargs` 를 신원 없는 실행기로 본다)."""
+    for _ in range(16):                                  # 유한: `sudo env nohup git …`
+        i = 0
+        while i < len(toks) and (ASSIGN_WORD.match(toks[i]) or toks[i] in SHELL_KEYWORDS):
+            i += 1
+        toks = toks[i:]
+        if not toks:
+            return toks
         head = toks[0].rsplit("/", 1)[-1]
-        if re.match(r"^[A-Za-z_]\w*=", toks[0]) or head in LAUNCHERS or toks[0].startswith("-"):
-            toks = toks[1:]
-        elif head == "timeout" and len(toks) > 1:
-            toks = toks[2:]
-        else:
-            break
+        valued = LAUNCHERS.get(head, LEADING_POSITIONAL.get(head))
+        if valued is None or head in stop:
+            return [head] + toks[1:]
+        i = 1
+        while i < len(toks):
+            t = toks[i]
+            if t == "--":
+                i += 1
+                break
+            if head == "env" and t in ("-S", "--split-string") and i + 1 >= len(toks):
+                return []                                # 값 없는 `env -S` — 실행할 명령이 없다(IndexError 로 훅이 죽었다)
+            if head == "env" and (t in ("-S", "--split-string") or t.startswith(("-S", "--split-string="))):
+                # `env -S 'cp x' f` 는 값을 낱말로 쪼개 **명령으로** 실행한다 — 값은 건너뛸 옵션 값이 아니다
+                val = toks[i + 1] if t in ("-S", "--split-string") else t.split("=", 1)[1] if "=" in t else t[2:]
+                rest = toks[i + 2:] if t in ("-S", "--split-string") else toks[i + 1:]
+                toks = ["env"] + val.split() + rest
+                i = 1
+                continue
+            if t in valued:
+                i += 2
+            elif t.startswith("-") or (head == "env" and ASSIGN_WORD.match(t)):
+                i += 1
+            else:
+                break
+        if head in LEADING_POSITIONAL:
+            i += 1                                       # DURATION
+        toks = toks[i:]
     return toks
+
+
+def tokens(seg: str) -> list:
+    """하위 명령을 실제 프로그램부터 시작하는 낱말 목록으로."""
+    return strip_launchers(words(seg))
+
+
+def git_sub(toks: list):
+    """(git 하위 명령의 위치, `-C` 로 준 디렉터리들). toks[0] 은 git. 하위 명령이 없으면 위치 -1."""
+    i, dirs = 1, []
+    while i < len(toks):
+        t = toks[i]
+        if t in GIT_VALUED:
+            if t == "-C" and i + 1 < len(toks):
+                dirs.append(toks[i + 1])
+            i += 2
+        elif t.startswith("-"):
+            i += 1
+        else:
+            return i, dirs
+    return -1, dirs
 
 
 _RANGE = re.compile(r"(-?\d+|[^\d])\.\.(-?\d+|[^\d])(?:\.\.(-?\d+))?")
@@ -495,7 +799,7 @@ def brace_expand(t: str, limit: int = 256):
 def write_targets(seg: str, whole: str = "") -> list:
     """이 하위 명령이 쓰는 경로. 대상이 파이프·find 결과라 드러나지 않으면 명령 전체의 경로 인자를 대신 돌려준다."""
     out = [a or b for a, b in REDIRECT.findall(seg) if (a or b) not in ("/dev/null", "&1", "&2")]
-    toks = _tokens(seg)
+    toks = tokens(seg)
     if not toks:
         return out
     head = toks[0].rsplit("/", 1)[-1]

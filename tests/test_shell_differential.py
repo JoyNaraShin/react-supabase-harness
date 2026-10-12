@@ -12,6 +12,7 @@ v0.35.1 은 변수 재대입 10가지를 놓쳐 `rm -rf /` 급 삭제를 통과�
   touch — 실제 대상이 보호 파일(.claude/state/…)이면 가드는 막는다.
 """
 import itertools
+import re
 import json
 import os
 import shutil
@@ -39,11 +40,26 @@ MUTATORS = [
     "set -- /", "S=/ true", "(S=/)", "{ S=/; }", "select S in /; do break; done <<< 1",
     "mapfile -t A <<< /", "printf '%s' \"$S\"", "echo '$S'",
     "cd ..", "cd ../..", "cd ~", "cd", "cd $X", "cd \"$(echo /)\"", "X=$(echo /)", "echo $(echo hi)",
+    # 명령 위치의 `.`·`source`(./s.sh 가 S·T 를 / 로 바꾼다)와 인자 `.`(코드를 읽지 않는다) — 0.40.0 F2
+    ". ./s.sh", "\".\" ./s.sh", "\\. ./s.sh", "source ./s.sh", "\\source ./s.sh", "if true; then . ./s.sh; fi",
+    "{ . ./s.sh; }", ">/dev/null . ./s.sh", "command . ./s.sh", "X=1 . ./s.sh", "! . ./s.sh", "while . ./s.sh; do break; done",
+    "git add . 2>/dev/null || true", "echo .", "ls . >/dev/null",
+    # 독립 검증 1회차 F1 — 리다이렉트·옵션·변수 경유 source
+    "2>&1 . ./s.sh", ">&2 . ./s.sh", ">| /dev/null . ./s.sh", "time -p . ./s.sh", "command -p . ./s.sh",
+    "command -- . ./s.sh", "X=source; $X ./s.sh", "echo x # it's\n. ./s.sh", "<./s.sh . ./s.sh",
+    # 2회차 N2·N3 — 간접 실행, 이스케이프된 공백 뒤 `#`
+    'f(){ "$@"; }; f . ./s.sh', 'set -- . ./s.sh; "$@"', "set -- source; $1 ./s.sh", "f(){ $1 $2; }; f source ./s.sh",
+    "echo a\\ # ; . ./s.sh",
+    # 3·4회차 R3-1·R3-2 — 중괄호 확장·치환 머리 source
+    "{source,} ./s.sh", "{.,} ./s.sh", "$(printf '\\56') ./s.sh", "`printf .` ./s.sh",
 ]
 VALUES = ["/tmp/hx/a/b", "/tmp/hx/a/b/../../..", ".", "..", "x/..", "/", "~", "build"]
 RM_USES = ["rm -rf $S", "rm -rf ${S}", 'rm -rf "$S"', "rm -rf $S/", "rm -rf $S/..", "rm -rf $S/../../..",
            "rm -rf '$S'/..", "rm -rf $T", "rm -rf $X/tmp", "rm -rf \"$X\"/usr", "rm -rf ${X}/../tmp", "rm -rf work",
-           "rm -rf ../work", "rm -rf $S/../work", 'rm -rf "${X:-/tmp/hx}"/x']
+           "rm -rf ../work", "rm -rf $S/../work", 'rm -rf "${X:-/tmp/hx}"/x',
+           # 아는 변수의 변형 확장 — 접두를 깎거나(4회차 R4-1) 원래 값을 남긴다(0.40.0 퍼즈)
+           "rm -rf ${S%/*}", "rm -rf ${S%%/a*}", "rm -rf ${S:0:4}", "rm -rf ${S//?/}/usr", "rm -rf ${S/x}usr",
+           "rm -rf /${S:99}", "rm -rf ${HOME%/*}", "rm -rf ${PWD::1}usr"]
 
 RECORDER = r'''
 __rec() { local a; for a in "$@"; do case "$a" in -*) ;; *) printf '%s\t%s\0' "$PWD" "$a" >> "$__OUT";; esac; done; }
@@ -64,6 +80,43 @@ done
 """
 
 
+_STUB = []
+
+
+def _stub_dir() -> str:
+    """실행 PATH 의 **유일한** 디렉터리 — 삭제 도구(rm·rmdir·unlink·shred·mv)는 기록기, 그 밖에는 이 테스트가 쓰는
+    도구만 링크한다. `/usr/bin:/bin` 을 PATH 에 두면 함수가 덮지 못하는 경로(`command rm`·런처·`env PATH=…`)가
+    진짜 rm 에 닿는다(0.40.0 독립 검증 3회차 R3-3)."""
+    if not _STUB:
+        d = tempfile.mkdtemp(prefix="harness-stub-")
+        for name in ("rm", "rmdir", "unlink", "shred", "mv"):
+            with open(os.path.join(d, name), "w") as f:
+                f.write(REAL_RM_RECORDER)
+            os.chmod(os.path.join(d, name), 0o755)
+        for name in ("python3", "env", "find", "xargs", "cat", "ls", "mkdir", "sh"):   # bin/rm(파이썬)·래퍼 머리용
+            src = shutil.which(name, path="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+            if src:
+                os.symlink(src, os.path.join(d, name))
+        _STUB.append(d)
+    return _STUB[0]
+
+
+# 실행 사본에 이것이 있으면 실행하지 않는다 — 기록기를 지나쳐 진짜 삭제 도구에 닿을 수 있는 형태(절대·변형 경로,
+# 기본 PATH 로 찾는 `command -p rm`(찾기만 바꾸고 자식 PATH 는 그대로라 `command -p .`·`sh` 는 안전), PATH 를 건드리는
+# 모든 형태와 `env -i`·`env -u`, `python3 -c`, find -delete — 0.40.0 독립 검증 3·4회차). 판정(scan)은 원문으로 이미 했다.
+_UNSAFE_RUN = re.compile(
+    r"[\w.${}~-]*/(?:rm|rmdir|unlink|shred|mv)\b"                   # 경로로 부르는 삭제 도구(`/bin/rm`·`./rm`·`$X/rm`)
+    r"|\bcommand(?:\s+-\w+)*\s+-\w*p\w*(?:\s+-\w+)*\s+(?:rm|rmdir|unlink|shred|mv)\b"
+    r"|\bPATH\b"                                                    # PATH 재설정·`read PATH`·`env -u PATH`
+    r"|\benv\b[^;&|\n]*\s-(?:\w*i\b|u\b|-ignore-environment|-unset)"  # env -i 는 기본 PATH 로 찾는다
+    r"|\bpython3?\b[^;&|\n]*\s-\w*c\b|-delete\b")
+
+
+def _unsafe_run(run: str) -> bool:
+    """따옴표·백슬래시를 벗긴 모양으로 본다(`/bin/r\\m`·`"command" -p rm`). `\\rm`·`r\\m` 자체는 PATH(=스텁)로 풀려 안전하다."""
+    return bool(_UNSAFE_RUN.search(re.sub(r"[\\'\"]", "", run)))
+
+
 def real_args(cmd: str, cwd: str, home: str, wrapper: str = "") -> list:
     """bash 가 실제로 rm/touch 에 넘긴 인자 — (그때의 PWD, 인자) 를 절대 경로로.
     wrapper=<기록기 경로> 면 rm 을 함수로 바꾸지 않고 PATH 앞의 bin/rm(실행 시점 가드)을 지나게 한다 —
@@ -71,11 +124,18 @@ def real_args(cmd: str, cwd: str, home: str, wrapper: str = "") -> list:
     out = os.path.join(home, "out.tsv")
     if os.path.exists(out):
         os.unlink(out)
-    env = {"PATH": "/usr/bin:/bin", "HOME": home, "__OUT": out}
-    script = RECORDER + cmd
+    # 안전: 셸 함수 기록기는 `command rm`·`/bin/rm` 을 덮지 못한다 — 이 테스트는 0.35 부터 그 두 머리를 진짜 rm 으로
+    # 실행했다(정적 가드가 통과시킨 대상만, 0.40.0 독립 검증이 찾음). 판정(scan)은 원문으로 하고, **실행하는 사본**만
+    # 기록기로 돌린다: 두 머리를 `rm` 으로 바꾸고, PATH 맨 앞에 기록기 스텁(rm·rmdir·unlink·shred·mv)을 둔다.
+    run = re.sub(r"(?<![\w./-])(?:command rm|/bin/rm) ", "rm ", cmd)        # 낱말 경계에서만(`/usr/bin/rm` 은 그대로 → 거부)
+    if _unsafe_run(run) or re.search(r"\bcommand\s+(?:-\S+\s+)*rm\b", run):
+        raise AssertionError(f"실행 사본에 기록기를 지나치는 rm 이 남았다 — 실행하지 않는다: {cmd!r}")
+    stub = _stub_dir()
+    env = {"PATH": stub, "HOME": home, "__OUT": out}
+    script = RECORDER + run
     if wrapper:
-        env.update(PATH=WRAPPER_DIR + ":/usr/bin:/bin", HARNESS_REAL_RM=wrapper, HARNESS_PROJECT_DIR=cwd)
-        script = RECORDER.replace("rm() { __rec \"$@\"; }\n", "") + cmd
+        env.update(PATH=WRAPPER_DIR + ":" + stub, HARNESS_REAL_RM=wrapper, HARNESS_PROJECT_DIR=cwd)
+        script = RECORDER.replace("rm() { __rec \"$@\"; }\n", "") + run
     subprocess.run([BASH, "-c", script + "\nwait"], cwd=cwd, env=env, capture_output=True, timeout=10)
     res = []
     if os.path.exists(out):
@@ -120,6 +180,9 @@ def gen_grammar(rnd) -> str:
         lambda: "S=$(echo " + rnd.choice(vals) + ")", lambda: "S=`echo /`", lambda: "T=$S",
         lambda: "S=${S%/*}", lambda: "S=${S#*/}", lambda: "S=${S/b/..}", lambda: "true", lambda: ":",
         lambda: "{ " + rnd.choice(["S=/", "cd /", "true"]) + "; }", lambda: "( " + rnd.choice(["S=/", "cd /"]) + " )",
+        lambda: rnd.choice(["", "then ", "do ", "! ", "{ ", "command ", ">/dev/null ", "X=1 "])
+        + rnd.choice([".", "'.'", "\\.", "source", "\"source\""]) + " ./s.sh",
+        lambda: rnd.choice(["git add .", "echo .", "ls ."]) + " >/dev/null 2>&1",
     ]
     targets = ["$S", '"$S"', "${S}", "$S/", "$S/..", "$S/*", "${A[0]}", '"${A[@]}"', "$1", '"$@"', "$T",
                "${S%/*}", "${S#/}", "$S{,/..}", "~", "~+", "~-", "$PWD", "$OLDPWD", "*", "./*", "../*",
@@ -167,6 +230,8 @@ class ShellDifferentialTest(unittest.TestCase):
         cls.home = os.path.realpath(os.path.join(cls.tmp, "home"))
         cls.cwd = os.path.join(cls.home, "proj", "work")      # cwd 가 홈 3단계 아래 — 조상 삭제를 잴 수 있게
         os.makedirs(cls.cwd)
+        with open(os.path.join(cls.cwd, "s.sh"), "w") as f:      # `. ./s.sh` 가 읽는 파일 — 값을 바꾼다
+            f.write("S=/; T=/\n")
         cls.bdg = load("block-destructive-git.py")
         cls.recorder = os.path.join(cls.tmp, "real-rm-recorder.sh")
         with open(cls.recorder, "w") as f:
@@ -181,6 +246,22 @@ class ShellDifferentialTest(unittest.TestCase):
         for pre, join, mut, val, use in itertools.product(PREFIXES, JOINERS, MUTATORS, VALUES, RM_USES):
             p = pre.format(v=val)
             yield (p + join + mut + "; " + use) if mut else (p + join + use)
+
+    def test_executed_copy_never_reaches_a_real_rm(self):
+        # 0.35–0.39 는 `command rm`·`/bin/rm` 머리를 진짜 rm 으로 실행했다 — 실행 사본은 기록기로만 간다
+        self.assertEqual(real_args("command rm -rf zz; /bin/rm -rf yy", self.cwd, self.home),
+                         [os.path.join(self.cwd, "zz"), os.path.join(self.cwd, "yy")])
+        # 독립 검증 3회차 R3-3 — 거부 목록만으로는 변형 경로가 샌다. PATH 는 스텁뿐이고 변형도 거부한다
+        for c in ["/usr/bin/rm -rf zz", "//bin/rm zz", "/bin/./rm zz", "/bin/r\\m zz", '"command" -p rm zz',
+                  "env PATH=/bin rm zz", "find zz -delete",
+                  # 4회차 (d) — 스텁 전용 PATH 에서도 진짜 도구에 닿는 형태
+                  "env -i rm zz", "env -u PATH rm zz", "X=/bin; $X/rm zz", "cd /bin && ./rm zz",
+                  "read PATH <<< /bin; rm zz", "printf -v PATH /bin; rm zz", "python3 -c 'import shutil'"]:
+            with self.subTest(c=c), self.assertRaises(AssertionError):
+                real_args(c, self.cwd, self.home)
+        self.assertEqual(real_args("\\rm zz; env rm yy", self.cwd, self.home),       # PATH 로 풀리는 형태는 기록기에 닿는다
+                         [os.path.join(self.cwd, "zz"), os.path.join(self.cwd, "yy")])
+        self.assertFalse(os.path.islink(os.path.join(_stub_dir(), "rm")))                   # 스텁의 rm 은 기록기다
 
     def test_rm_guard_never_allows_a_dangerous_real_target(self):
         misses, checked = [], 0

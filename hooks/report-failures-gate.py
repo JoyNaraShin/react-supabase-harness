@@ -156,12 +156,11 @@ def is_read_only_segment(seg: str) -> bool:
     return False
 
 
-LEAD_STRIP = {"sudo", "doas", "command", "nohup", "time", "env", "nice", "stdbuf"}
-# 셸 문법어는 명령이 아니다 — `for d in x; do rm "$d"; done` 의 `done` 을 명령으로 세어
-# '실패했던 done 이 성공했다'는 거짓 정정 요구가 나왔다(2026-10-09 실사용).
-SHELL_LEAD = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "}"}
-SHELL_CLOSE = {"done", "fi", "esac"}
+# 셸 문법어(`do`·`done`…)와 런처는 shellparse.strip_launchers 가 벗긴다 — `for d in x; do rm "$d"; done` 의
+# `done` 을 명령으로 세어 '실패했던 done 이 성공했다'는 거짓 정정 요구가 나왔다(2026-10-09 실사용).
+# 머리가 이것이면 신원이 없다(반복 구문의 머리).
 SHELL_HEADER = {"for", "case", "select", "function", "in"}
+OTHER_VALUED = {"-C", "--filter", "--dir"}             # git 밖 하위 명령 도구의 값 받는 전역 옵션(pnpm --filter 등)
 LONG_FLAG = {"--force": "f", "--recursive": "r", "--verbose": "v", "--all": "a"}
 
 
@@ -172,29 +171,23 @@ def _norm_flag(t: str) -> str:
 
 def _segment_shape(seg: str):
     seg = re.sub(r"\d?>>?\s*\S+|<\s*\S+", " ", seg)          # 리다이렉트는 신원이 아니다
-    toks = [t for t in re.split(r"\s+", seg.strip()) if t]
-    while toks:
-        if (re.match(r"^[A-Za-z_]\w*=", toks[0]) or os.path.basename(toks[0]) in LEAD_STRIP
-                or toks[0] in SHELL_LEAD or toks[0] in SHELL_CLOSE):
-            toks = toks[1:]
-        elif toks[0] in SHELL_HEADER:
-            return None
-        elif os.path.basename(toks[0]) == "timeout" and len(toks) > 1:
-            toks = toks[2:]
-        else:
-            break
-    if not toks:
+    toks = shellparse.strip_launchers(shellparse.words(seg), stop=GENERIC_RUNNER)
+    if not toks or toks[0] in SHELL_HEADER:
         return None
-    head = os.path.basename(toks[0]).lower()
+    head = toks[0].lower()
     if head in GENERIC_RUNNER or head == "cd":
         return None
     rest = toks[1:]
     parts = [head]
-    if head in SUBCOMMAND_TOOLS:
-        # 전역 옵션(`git -C dir`)을 건너뛰고 첫 위치 인자를 하위 명령으로 본다.
+    if head == "git":
+        i, _ = shellparse.git_sub(toks)                  # 전역 옵션(`git -C dir`)을 건너뛴 첫 위치 인자
+        if i > 0:
+            parts.append(toks[i])
+            rest = toks[i + 1:]
+    elif head in SUBCOMMAND_TOOLS:
         i = 0
         while i < len(rest) and rest[i].startswith("-"):
-            i += 2 if rest[i] in ("-C", "-c", "--git-dir", "--work-tree", "--filter", "--dir") else 1
+            i += 2 if rest[i] in OTHER_VALUED else 1
         if i < len(rest):
             parts.append(rest[i])
             rest = rest[i + 1:]

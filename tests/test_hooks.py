@@ -2266,3 +2266,248 @@ class RmPolicyTest(unittest.TestCase):
         self.assertEqual(self.runtime(["-r", str(self.box / "tmpx")], self.sib).returncode, 0)
         self.assertEqual(self.runtime(["-r", str(self.home)], self.sib).returncode, 1)
         self.assertEqual(self.runtime(["notes.txt"], self.proj).returncode, 0)        # 재귀가 아니면 판정 없음
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 셸 해석 단일화 (0.40.0 S3) — 런처·토크나이저·git 전역 옵션은 shellparse 한 곳, 위치를 모르는 cd 는 UNKNOWN
+# ─────────────────────────────────────────────────────────────────────────────
+class ShellParseUnifiedTest(_RepoCase):
+    BIG = "\n".join(f"export const v{i} = {i}" for i in range(40))
+
+    def setUp(self):
+        super().setUp()
+        self.sp = load_module("shellparse.py")
+
+    def snap(self, cmd):
+        return self.hook("snapshot-guard.py", {"tool_name": "Bash", "tool_input": {"command": cmd}})
+
+    def snapshots(self):
+        return _git(self.proj, "for-each-ref", "--format=%(objectname)", "refs/harness/snapshots/").stdout.split()
+
+    def test_launchers_are_read_the_same_everywhere(self):
+        for cmd, head in [("nice -n 10 rm src/x", ["rm", "src/x"]), ("env -u X gh pr create", ["gh", "pr", "create"]),
+                          ("timeout -s KILL 5 rm a", ["rm", "a"]), ("sudo -u bob /bin/rm a", ["rm", "a"]),
+                          ("xargs -I {} cp {} src/", ["cp", "{}", "src/"]), ("then time command rm a", ["rm", "a"])]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.sp.tokens(cmd), head)
+        self.assertEqual(self.sp.git_sub(["git", "-C", "a", "--namespace", "n", "-c", "k=v", "push"]), (7, ["a"]))
+        self.assertEqual(self.sp.git_sub(["git", "--version"])[0], -1)
+
+    def test_command_regex_sees_through_valued_launcher_options(self):
+        ge = load_module("gate-engine.py")
+        for c in ["env -u X gh pr create --fill", "if gh pr create; then :; fi", "/usr/bin/gh pr create"]:
+            with self.subTest(c=c):
+                self.assertTrue(ge.p_command_regex({"tool": "Bash", "command": c, "cwd": "."}, r"gh\s+pr\s+create")[0])
+        self.assertFalse(ge.p_command_regex({"tool": "Bash", "command": "echo 'gh pr create'", "cwd": "."},
+                                            r"gh\s+pr\s+create")[0])
+
+    def test_cd_to_an_unknown_place_snapshots_the_session_project(self):
+        Path(self.proj, "src", "wip.ts").write_text("uncommitted\n")
+        self.snap("cd $HOME/Projects/x && rm -rf zz")
+        self.assertEqual(len(self.snapshots()), 1)
+        Path(self.proj, "src", "wip2.ts").write_text("more\n")
+        self.snap('cd "$S/proj" && rm -rf zz')
+        self.assertEqual(len(self.snapshots()), 2)
+        self.assertIsNone(self.snap("cd $X && ls && cat a"))           # 읽기만 하면 찍지 않는다
+        self.assertEqual(len(self.snapshots()), 2)
+        segs = self.sp.segments("cd - && rm a; cd /tmp && rm b; cd c && rm d; popd; rm e", "/p")
+        self.assertEqual([h for _, h in segs], [self.sp.UNKNOWN, "/tmp", "/tmp/c", self.sp.UNKNOWN])
+
+    def test_lossy_notice_follows_the_program_not_the_text(self):
+        Path(self.proj, "src", "wip.ts").write_text("uncommitted\n")
+        self.assertIsNone(self.snap("grep -rn rm src > /dev/null && touch src/n.ts"))   # 찍되 알리지 않는다
+        self.assertEqual(len(self.snapshots()), 1)
+        Path(self.proj, "src", "wip3.ts").write_text("x\n")
+        self.assertIn("git show", context(self.snap("sudo rm src/old.ts")))
+
+    def test_interpreter_heredoc_strings_are_not_shell_writes(self):
+        mark_harness(self.proj)
+        py = "python3 - <<'EOF'\nimport os\nos.system(\"rm -rf src\")\nprint('x > src/a.ts')\nEOF"
+        out = run_hook("block-impl-delegation.py", {"tool_name": "Bash", "tool_input": {"command": py},
+                                                    "agent_type": "general-purpose", "agent_id": "a1", "cwd": self.proj},
+                       env={"CLAUDE_PROJECT_DIR": self.proj})
+        self.assertIsNone(out)
+        self.assertIsNone(self.gate("Bash", {"command": py}))
+        # 셸이 읽는 heredoc 은 그대로 명령이다
+        sh = f"bash <<'EOF'\ncat > src/new.ts <<'X'\n{self.BIG}\nX\nEOF"
+        self.assertTrue(denied(self.gate("Bash", {"command": sh})))
+
+    def test_unknown_cwd_skips_relative_but_not_absolute_targets(self):
+        mark_harness(self.proj)
+        self.assertIsNone(self.gate("Bash", {"command": f"cd $X && cat > new.ts <<'EOF'\n{self.BIG}\nEOF"}))
+        self.assertTrue(denied(self.gate("Bash", {"command": f"cd $X && cat > {self.proj}/src/new.ts <<'EOF'\n{self.BIG}\nEOF"})))
+
+    def test_source_counts_only_at_command_position(self):
+        la = self.sp.leading_assignments
+        self.assertEqual(la("S=/tmp/x && git add . && rm -rf $S/y"), {"S": "/tmp/x"})
+        self.assertEqual(la("S=/tmp/x && echo source && rm $S"), {"S": "/tmp/x"})
+        for c in ["S=/a && . ./e && rm $S", 'S=/a; "." e; rm $S', "S=/a; \\source e; rm $S",
+                  "S=/a; if true; then . e; fi; rm $S", "S=/a; >/dev/null . e; rm $S", "S=/a; { . e; }; rm $S",
+                  "S=/a; command . e; rm $S", "S=/a; X=1 . e; rm $S"]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), {})
+
+    def test_source_through_redirects_options_and_variables_bails(self):
+        # 독립 검증 1회차 F1 — 명령 위치 열거는 리다이렉트·옵션·변수 경유를 놓쳤다
+        la = self.sp.leading_assignments
+        for c in ["S=/a; 2>&1 . e; rm $S", "S=/a; >&2 . e; rm $S", "S=/a; >| /dev/null . e; rm $S", "S=/a; time -p . e",
+                  "S=/a; command -p . e", "S=/a; command -- . e", "S=/a; X=source; $X e", "S=/a; echo x # it's\n. e",
+                  "S=/a; X='.'; $X e", "S=/a; /dev/null . e"]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), {})
+        self.assertEqual(la("S=/tmp/x && cp ${S} . && ls ."), {"S": "/tmp/x"})
+
+    def test_quoted_newlines_and_loose_heredoc_ends_do_not_hide_commands(self):
+        # 독립 검증 1회차 F2 — 따옴표 짝 오판과 `EOF ` 종료 줄
+        seg = lambda c: [x for x, _ in self.sp.segments(c, "/p")]
+        self.assertIn("cp x src/a.ts", seg("echo \"$(echo '\"')\"\ncp x src/a.ts"))
+        self.assertIn("cp x src/a.ts", seg("cat <<EOF\nEOF \nit's\nEOF\ncp x src/a.ts"))
+
+    def test_heredoc_inside_quoted_command_substitution_is_data(self):
+        # 커밋·PR 본문의 정형 — 큰따옴표 안 `$(cat <<'EOF' …)` 의 본문은 데이터다(첫 수정이 본문을 명령으로 읽었다)
+        c = "gh pr create --title t --body \"$(cat <<'EOF'\n## 왜\nit's broken > src/x.ts\nEOF\n)\" && ls"
+        self.assertEqual([x for x, _ in self.sp.segments(c, "/p")][1:], ["ls"])
+        self.assertIsNone(self.snap(c))
+
+    def test_env_split_string_value_is_the_command(self):
+        # 독립 검증 1회차 F3 — `env -S` 의 값은 실행된다
+        for c, t in [("env -S 'cp x' src/a.ts", ["cp", "x", "src/a.ts"]), ("env -S 'tee src/a.ts'", ["tee", "src/a.ts"]),
+                     ("env --split-string='cp x' y", ["cp", "x", "y"])]:
+            with self.subTest(c=c):
+                self.assertEqual(self.sp.tokens(self.sp.segments(c, "/p")[0][0]), t)
+        bdg = load_module("block-destructive-git.py")
+        self.assertTrue(bdg.scan("env -S 'git push --force'"))
+
+    def test_bare_env_split_string_does_not_crash_the_hooks(self):
+        # 독립 검증 2회차 N1 — 값 없는 `env -S` 가 IndexError 로 훅을 죽였다(비차단 오류 = fail-open)
+        self.assertEqual(self.sp.strip_launchers(["env", "-S"]), [])
+        mark_harness(self.proj)
+        for c in ["env -S && cp x src/a.ts", "env -S; touch .claude/state/plan-gate-off"]:
+            with self.subTest(c=c):
+                out = self.gate("Bash", {"command": c})
+                self.assertTrue(denied(out))
+        out = run_hook("block-impl-delegation.py", {"tool_name": "Bash", "agent_type": "general-purpose", "agent_id": "a1",
+                                                    "cwd": self.proj, "tool_input": {"command": "env -S && cp x src/a.ts"}},
+                       env={"CLAUDE_PROJECT_DIR": self.proj})
+        self.assertTrue(denied(out))
+
+    def test_indirect_execution_of_a_dot_argument_bails(self):
+        # 독립 검증 2회차 N2 — 인자 `.` 가 함수·위치 매개변수·변수 머리로 나중에 실행된다
+        la = self.sp.leading_assignments
+        for c in ['S=/a; f(){ "$@"; }; f . ./s.sh; rm -rf $S', 'S=/a; set -- . ./s.sh; "$@"', "S=/a; set -- source; $1 e",
+                  "S=/a; f(){ $1 $2; }; f source e", 'S=/a; cp x .; "$@"', "S=/a; ls .;$1 e"]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), {})
+        self.assertEqual(la('S=/tmp/x && git add . && rm -rf "$S"/y'), {"S": "/tmp/x"})
+
+    def test_brace_expanded_source_and_variable_heads_bail(self):
+        # 독립 검증 3회차 R3-1(회귀) — `{source,}` 는 중괄호 확장으로 source 가 된다
+        # R3-2 — 명령 낱말이 변수·치환이면 무엇이 실행될지 모른다(`$X`·`$(printf '\56')`), alias 는 나중 줄을 바꾼다
+        la = self.sp.leading_assignments
+        for c in ["S=/a; {source,} ./s.sh; rm -rf $S", "S=/a; {.,} ./s.sh", "S=/a; $X ./s.sh",
+                  "S=/a; $(printf '\\56') ./s.sh", "S=/a; `printf .` ./s.sh", "S=/a; alias s=.\ns ./s.sh"]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), {})
+        for c, want in [("S=/tmp/x && git add . && rm $S", {"S": "/tmp/x"}), ("S=/tmp/x; cp ${S} . && ls", {"S": "/tmp/x"}),
+                        ("S=/tmp/x; echo {a,b}; rm $S", {"S": "/tmp/x"})]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), want)
+
+    def test_transformed_known_variable_keeps_its_value(self):
+        # 0.40.0 퍼즈(시드 31337) — `${S/x}` 를 모르는 변수 하나로 접어 `S=/; rm -rf ${S/x}usr` 가 `usr` 로 읽혔다(0.39.0 까지)
+        bdg = load_module("block-destructive-git.py")
+        # 그 수정만 쓰면 접두를 깎는 변형이 깊은 경로로 읽혔다(독립 검증 4회차 R4-1, 회귀 High) — 두 후보를 다 본다
+        for c in ["S=/; rm -rf ${S/x}usr", "S=/; rm -rf ${S#x}usr", "export S=/\nrm -r -f ${S/...\\057}}",
+                  "rm -rf ${HOME%/*}", "rm -rf ${PWD%/*/*}", "S=/tmp/hx/a; rm -rf ${S%/hx/a}", "S=/tmp/hx/a; rm -rf ${S:0:4}",
+                  "S=/tmp/hx/a; rm -rf ${S//?/}/usr", "S=/tmp/hx/a; rm -rf ${S#/tmp/hx/a}/usr", "S=/tmp/hx/a; rm -rf /${S:99}"]:
+            with self.subTest(c=c):
+                self.assertTrue(bdg.scan(c))
+        self.assertTrue(bdg.scan("S=x/..; rm -rf ${S/x}usr"))                        # 치환이 앞에 `/` 를 만든다(`/..usr`)
+        self.assertTrue(bdg.scan("S=/tmp/a; rm -rf ${S/x}b"))                         # 대가: 안전한 변형도 막는다(드묾)
+        for c in ["rm -rf ${PWD::1}usr", "rm -rf ${HOME%/*}x", "f(){ S=/; }; f; rm -rf ${S/x}usr",
+                  "S=/tmp/hx/a; r=S; rm -rf ${!r%/*}", "A=(/ x); rm -rf ${A[0]/x}usr"]:     # 환경 변수·함수·간접 참조·배열(자체 점검)
+            with self.subTest(c=c):
+                self.assertTrue(bdg.scan(c))
+        self.assertIsNone(bdg.scan("rm -rf ./${X%.ts}.bak"))                          # 상대 경로 앞 변형은 그대로 통과
+        self.assertIsNone(bdg.scan("for f in a.ts; do rm -f ${f%.ts}.js; done"))
+
+    def test_glob_command_name_may_be_source(self):
+        # 독립 검증 4회차 R4-2 — `sourc?`·`[s]ource` 는 cwd 의 파일 `source` 로 펼쳐져 builtin source 가 된다
+        la = self.sp.leading_assignments
+        for c in ["S=/a; sourc? ./s.sh; rm $S", "S=/a; [s]ource ./s.sh", "S=/a; s*ce ./s.sh"]:
+            with self.subTest(c=c):
+                self.assertEqual(la(c), {})
+        self.assertEqual(la("S=/a; ls *.ts; rm $S"), {"S": "/a"})
+        self.assertEqual(la('R=/a; if [ "$N" != 2 ]; then exit; fi; [[ -n x ]]; git -C $R push'), {"R": "/a"})  # 시험 명령은 글롭 아님
+
+    def test_escaped_space_before_hash_is_not_a_comment(self):
+        # 독립 검증 2회차 N3 — `a\ #b` 의 `#` 는 낱말 안이다
+        self.assertEqual(self.sp.leading_assignments("S=/a; echo a\\ # ; . ./s.sh\nrm -rf $S"), {})
+        self.assertIn("rm -rf src", [x for x, _ in self.sp.segments("echo a\\ #b; rm -rf src", "/p")])
+        # 파괴 가드의 자체 normalize 도 같은 구멍이었다(0.39.0 까지 — `\ #` 뒤 명령 전체가 검사 밖)
+        bdg = load_module("block-destructive-git.py")
+        self.assertTrue(bdg.scan("echo a\\ # ; git push --force origin main"))
+        self.assertIsNone(bdg.scan("echo hi # git push --force"))
+
+    def test_cd_pwd_is_the_current_place(self):
+        # 독립 검증 1회차 F4 — `cd "$PWD"` 로 위치 판정을 끄지 못한다
+        self.assertEqual(self.sp.segments('cd "$PWD" && cat > src/a.ts', "/p")[0][1], "/p")
+        self.assertEqual(self.sp.segments("cd ${PWD}/sub && rm a", "/p")[0][1], "/p/sub")
+
+    def test_escaped_double_quote_does_not_split_the_command(self):
+        segs = self.sp.segments('echo "a \\" ; rm -rf src" && ls', "/p")
+        self.assertEqual(len(segs), 2)
+        self.assertTrue(segs[0][0].startswith("echo"))
+
+    def test_data_strings_and_comments_do_not_hide_later_commands(self):
+        seg = lambda c: [x for x, _ in self.sp.segments(c, "/p")]
+        self.assertIn("rm -rf src", seg('gh pr create --body "fix #12" && rm -rf src'))    # 문자열 속 `#` 는 주석이 아니다
+        self.assertIn("rm -rf src", seg('echo "a <<EOF"\nrm -rf src\nEOF'))              # 문자열 속 `<<EOF` 는 heredoc 이 아니다
+        self.assertEqual(seg("# it's a comment\nrm -rf src"), ["rm -rf src"])            # 주석 속 `'` 는 따옴표가 아니다
+        self.assertEqual(seg("cat > f <<EOF\nrm -rf src\nEOF\nls"), ["cat > f <<EOF", "ls"])
+        mark_harness(self.proj)
+        out = run_hook("block-impl-delegation.py", {"tool_name": "Bash", "agent_type": "general-purpose", "agent_id": "a1",
+                                                    "cwd": self.proj, "tool_input": {"command": 'gh pr create --body "fix #1" && rm -rf src'}},
+                       env={"CLAUDE_PROJECT_DIR": self.proj})
+        self.assertTrue(denied(out))
+
+    def test_pushd_popd_return_to_a_known_place(self):
+        segs = self.sp.segments("pushd src && rm a.ts && popd; rm b; popd; rm c", "/p")
+        self.assertEqual([h for _, h in segs], ["/p/src", "/p", self.sp.UNKNOWN])
+
+    def test_prose_in_a_data_heredoc_is_not_source(self):
+        c = "S=/a && cat > $S/x.md <<'EOF'\n(x). 기간\nsource 확인\n. 끝\nEOF"
+        self.assertEqual(self.sp.leading_assignments(c), {"S": "/a"})
+
+    def test_report_failures_shapes_use_the_shared_reading(self):
+        rf = load_module("report-failures-gate.py")
+        shape = lambda c: rf.cmd_shapes("Bash", {"command": c})
+        self.assertEqual(shape("nice -n 10 rm -rf build"), ["rm -fr build"])
+        self.assertEqual(shape("git -C x --namespace n push origin"), ["git push origin"])
+        self.assertEqual(shape("find . | xargs rm"), ["find ."])            # xargs 는 신원 없는 실행기 그대로
+        self.assertEqual(shape("for d in a; do rm $d; done"), ["rm $d"])
+
+
+class ShellParseCompletenessTest(unittest.TestCase):
+    """셸 해석 표는 shellparse 한 곳에만 있다 — 상수 이름이 아니라 AST 로 본다(이름을 바꿔 다시 만들어도 걸린다)."""
+    LAUNCHER_NAMES = {"sudo", "doas", "nohup", "env", "nice", "stdbuf", "xargs", "exec", "builtin", "command", "timeout"}
+    GIT_GLOBALS = {"--git-dir", "--work-tree", "--namespace"}
+
+    def test_no_hook_keeps_its_own_launcher_or_git_option_table(self):
+        import ast
+        bad = []
+        files = [p for p in HOOKS.glob("*.py") if p.name != "shellparse.py"] + [ROOT / "bin" / "rm"]
+        for f in files:
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Set, ast.Tuple, ast.List, ast.Dict)):
+                    elts = node.keys if isinstance(node, ast.Dict) else node.elts
+                    strs = {e.value for e in elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+                    if len(strs & self.LAUNCHER_NAMES) >= 2 or len(strs & self.GIT_GLOBALS) >= 2:
+                        bad.append(f"{f.name}:{node.lineno}")
+                # 하위 명령 문자열을 공백으로 다시 쪼개지 않는다 — shellparse.words/tokens 를 쓴다
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "split"
+                        and not node.args and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id in ("seg", "segment", "sub")):
+                    bad.append(f"{f.name}:{node.lineno} .split()")
+        self.assertEqual(bad, [])

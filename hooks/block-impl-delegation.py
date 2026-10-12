@@ -111,20 +111,16 @@ def inside(path: Path, root: Path) -> bool:
 
 def git_tree_write(seg: str, cwd: str, root: Path) -> bool:
     """git 이 이 프로젝트의 작업 트리를 바꾸는가. 문자열 속 `git checkout`(검색어)은 명령이 아니다."""
-    toks = shellparse._tokens(seg)
-    if not toks or toks[0].rsplit("/", 1)[-1] != "git":
+    toks = shellparse.tokens(seg)
+    if not toks or toks[0] != "git":
         return False
-    repo, i = cwd, 1
-    while i < len(toks) and toks[i].startswith("-"):
-        if toks[i] in ("-C", "-c", "--git-dir", "--work-tree") and i + 1 < len(toks):
-            if toks[i] == "-C":
-                d = os.path.expanduser(toks[i + 1])
-                repo = d if os.path.isabs(d) else os.path.join(cwd, d)
-            i += 2
-        else:
-            i += 1
-    if i >= len(toks) or not inside(Path(repo), root):
-        return False                                  # 다른 저장소
+    i, dirs = shellparse.git_sub(toks)
+    repo = cwd
+    for d in dirs:
+        d = os.path.expanduser(d)
+        repo = d if os.path.isabs(d) else os.path.join(repo, d)
+    if i < 0 or repo.startswith(shellparse.UNKNOWN) or not inside(Path(repo), root):
+        return False                                  # 다른 저장소, 또는 위치를 모른다(판정 건너뜀)
     sub = toks[i]
     if sub == "stash":
         return len(toks) == i + 1 or toks[i + 1] not in GIT_STASH_READ
@@ -172,11 +168,14 @@ def main() -> None:
             deny(message(agent, hit))
     elif tool == "Bash":
         cmd = str(ti.get("command") or "")
-        for seg, here in shellparse.segments(cmd, str(data.get("cwd") or root)):
+        # 셸 전용 — python heredoc 본문의 문자열 "rm -rf src" 는 셸 명령이 아니다
+        for seg, here in shellparse.segments(cmd, str(data.get("cwd") or root), shell_only=True):
             if git_tree_write(seg, here, root):
                 deny(message(agent, "git 작업 트리 변경"))
             for t in shellparse.write_targets(seg, cmd):
                 t = os.path.expanduser(t)
+                if not os.path.isabs(t) and here == shellparse.UNKNOWN:
+                    continue                          # 위치를 모르는 상대 경로 — 판정 건너뜀
                 hit = in_code_zone(t if os.path.isabs(t) else os.path.join(here, t), root, policy["codeZone"])
                 if hit:
                     deny(message(agent, hit))

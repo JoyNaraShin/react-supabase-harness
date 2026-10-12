@@ -75,16 +75,20 @@ def _bash_writes(ctx) -> list:
     """Bash 가 프로젝트 안에 쓰는 (절대 경로, 동사) 목록. heredoc·cp·sed -i 로 만든 코드도 Write 와 같은 축으로 본다."""
     if "writes" not in ctx:
         out, base = [], os.path.realpath(str(ctx["root"]))
-        for seg, here in shellparse.segments(ctx["command"], ctx["cwd"]):
-            toks = shellparse._tokens(seg)
-            verb = toks[0].rsplit("/", 1)[-1] if toks else ""
+        # 셸 전용 — 인터프리터 heredoc 본문은 셸 명령이 아니다(`x = a > b` 를 리다이렉트로 읽었다)
+        for seg, here in shellparse.segments(ctx["command"], ctx["cwd"], shell_only=True):
+            toks = shellparse.tokens(seg)
+            verb = toks[0] if toks else ""
             for t0 in shellparse.write_targets(seg, ctx["command"]):
                 exp = shellparse.brace_expand(t0)
                 if exp is None:                          # 중괄호 확장이 너무 커서 전부 볼 수 없다 — 모르는 대상
                     out.append((UNKNOWN_WRITE, verb))
                     continue
                 for t in exp:
-                    p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
+                    t = os.path.expanduser(t)
+                    if here == shellparse.UNKNOWN and not os.path.isabs(t):
+                        continue                         # 위치를 모르는 상대 경로 — 판정 건너뜀(절대 경로는 본다)
+                    p = os.path.normpath(os.path.join(here, t))
                     if os.path.realpath(p).startswith(base + os.sep):
                         out.append((p.replace("\\", "/"), verb))
         ctx["writes"] = out
@@ -105,13 +109,11 @@ RUNNERS = {"npx", "bunx", "pnpx"}
 
 def _install_args(cmd: str) -> list:
     out = []
-    for seg in re.split(r"[;&|\n]+", cmd):
-        toks = [t for t in re.split(r"[\s'\"]+", seg) if t]
-        while toks and (re.match(r"^[A-Za-z_]\w*=", toks[0]) or toks[0] in ("sudo", "env", "command")):
-            toks = toks[1:]
+    for seg, _ in shellparse.segments(cmd, "."):
+        toks = shellparse.tokens(seg)
         if not toks:
             continue
-        head = toks[0].rsplit("/", 1)[-1].lower()
+        head = toks[0].lower()
         if head in RUNNERS:
             out += toks[1:]
         elif head in PKG_MANAGERS and any(t.lower() in INSTALL_VERBS for t in toks[1:]):
@@ -308,15 +310,12 @@ def p_harness_target(ctx, a):
 def p_command_regex(ctx, a):
     """Bash 하위 명령 정규식 — 하위 명령(`;`·`&&`·`|` 로 나뉜 것)마다 앞머리부터 맞춘다. 그래서
     `echo 'gh pr create'` 처럼 다른 명령의 인자로 나온 문자열과 heredoc 본문은 걸리지 않는다.
-    앞의 환경변수 대입·launcher(sudo·env 등)는 건너뛴다."""
+    앞의 환경변수 대입·셸 문법어·launcher(sudo·`env -u X` 등, 값 받는 옵션 포함)는 건너뛴다."""
     if ctx["tool"] != "Bash":
         return (False, "")
     rx = re.compile(a if isinstance(a, str) else a["pattern"])
-    for seg, _ in shellparse.segments(ctx["command"], str(ctx.get("cwd") or ".")):
-        toks = seg.split()
-        while toks and (re.match(r"[A-Za-z_]\w*=", toks[0]) or toks[0] in shellparse.LAUNCHERS):
-            toks.pop(0)
-        m = rx.match(" ".join(toks))
+    for seg, _ in shellparse.segments(ctx["command"], str(ctx.get("cwd") or "."), shell_only=True):
+        m = rx.match(" ".join(shellparse.tokens(seg)))
         if m:
             return (True, m.group(0)[:60])
     return (False, "")
@@ -651,7 +650,7 @@ def shell_touches_protected(cmd: str):
         settings = re.search(r"settings(?:\.local)?\.json", seg) and SETTINGS_OFF.search(seg)
         verb = WRITE_VERB.search(seg)
         if verb and verb.group(0).strip().split()[0] in ("cp", "rsync", "install"):
-            dest = [t for t in seg.split()[1:] if not t.startswith("-")][-1:]   # 복사는 마지막 인자만 쓴다
+            dest = [t for t in shellparse.tokens(seg)[1:] if not t.startswith("-")][-1:]   # 복사는 마지막 인자만 쓴다
             scope = " ".join(dest)
         else:
             scope = seg

@@ -46,7 +46,7 @@ import scope  # noqa: E402
 import shellparse  # noqa: E402
 from rmpolicy import SYSTEM_TOP, dangerous_root  # noqa: E402,F401
 
-ENV_PREFIX = re.compile(r"^[A-Za-z_]\w*=")
+ENV_PREFIX = shellparse.ASSIGN_WORD
 SHORT_C = re.compile(r"^-[a-z]*c$")
 SEPARATOR_CHARS = set("();|&")
 OPERATORS = {"&&", "||", "|", "|&", ";", ";;", ";&", "&", "\n", "(", ")"}
@@ -118,7 +118,7 @@ def normalize(command: str) -> str:
     rest of the line (the shell never runs it, and an apostrophe inside a comment would
     otherwise break parsing).
     """
-    out, i, n = [], 0, len(command)
+    out, i, n, esc = [], 0, len(command), -2
     quote = None
     while i < n:
         c = command[i]
@@ -137,11 +137,12 @@ def normalize(command: str) -> str:
             out.append(c)
         elif c == "\\" and i + 1 < n:
             out.append(" " if command[i + 1] == "\n" else c + command[i + 1])
+            esc = i + 1                     # `a\ #b` — 이스케이프된 공백 뒤 `#` 는 낱말 안이다(0.39.0 까지 뒤 명령이 숨었다)
             i += 2
             continue
         elif c == "\n":
             out.append(" ; ")
-        elif c == "#" and (i == 0 or command[i - 1] in " \t;&|("):
+        elif c == "#" and (i == 0 or (command[i - 1] in " \t;&|(" and esc != i - 1)):
             while i < n and command[i] != "\n":
                 i += 1
             continue
@@ -181,62 +182,17 @@ def strip_env(tokens: list) -> list:
     return tokens[i:]
 
 
-# Launchers that run their remaining argv as a command. Value = option flags that take
-# a separate value argument (so the value is not mistaken for the program).
-LAUNCHERS = {
-    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
-    "command": set(), "builtin": set(), "exec": {"-a"}, "nohup": set(),
-    "time": {"-f", "--format", "-o", "--output"},
-    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt",
-             "-C", "--close-from", "-D", "--chdir", "-r", "--role", "-t", "--type"},
-    "doas": {"-u", "-C"},
-    "nice": {"-n", "--adjustment"},
-    "stdbuf": {"-i", "-o", "-e"},
-    "xargs": {"-I", "-L", "-n", "-P", "-d", "-E", "-s", "-a", "--arg-file",
-              "--delimiter", "--max-args", "--max-procs", "--replace"},
-}
-# Launchers whose first positional argument is not the program (timeout DURATION cmd).
-LEADING_POSITIONAL = {"timeout": {"-s", "--signal", "-k", "--kill-after"}}
+# 런처·셸 문법어 표는 shellparse 한 곳에 있다(게이트끼리 같은 명령을 같은 프로그램으로 읽는다).
+LAUNCHERS, LEADING_POSITIONAL, SHELL_KEYWORDS = shellparse.LAUNCHERS, shellparse.LEADING_POSITIONAL, shellparse.SHELL_KEYWORDS
 
 
 def basename(tok: str) -> str:
     return tok.rsplit("/", 1)[-1] if "/" in tok else tok
 
 
-# Shell grammar words that precede a command: `while read b; do git branch -D "$b"; done`
-# (the command after `do`/`then`/`{` used to go unchecked).
-SHELL_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "}", "!", "done", "fi"}
-
-
 def unwrap(tokens: list) -> list:
     """Strip env assignments and launcher prefixes until the real program is first."""
-    for _ in range(16):  # bounded: `sudo env nohup git ...`
-        tokens = strip_env(tokens)
-        while tokens and tokens[0] in SHELL_KEYWORDS:
-            tokens = tokens[1:]
-        if not tokens:
-            return tokens
-        head = basename(tokens[0])
-        if head in LAUNCHERS or head in LEADING_POSITIONAL:
-            valued = LAUNCHERS[head] if head in LAUNCHERS else LEADING_POSITIONAL[head]
-            i = 1
-            while i < len(tokens):
-                t = tokens[i]
-                if t == "--":
-                    i += 1
-                    break
-                if t in valued:
-                    i += 2
-                elif t.startswith("-") or (head == "env" and ENV_PREFIX.match(t)):
-                    i += 1
-                else:
-                    break
-            if head in LEADING_POSITIONAL:
-                i += 1  # skip DURATION
-            tokens = tokens[i:]
-            continue
-        return [head] + tokens[1:]
-    return tokens
+    return shellparse.strip_launchers(tokens)
 
 
 # 이 하위 명령이 실행될 때 있을 수 있는 위치들 — 원래 cwd 기준 상대 경로("."), 절대 경로, `~…`, 모르면 None.
@@ -339,16 +295,7 @@ def track_cd(tokens: list) -> bool:
 
 def git_sub_index(tokens: list) -> int:
     """Index of git's subcommand token, skipping value-taking global options."""
-    i = 1
-    while i < len(tokens):
-        t = tokens[i]
-        if t in ("-C", "--git-dir", "--work-tree", "-c", "--namespace"):
-            i += 2
-        elif t.startswith("-"):
-            i += 1
-        else:
-            return i
-    return -1
+    return shellparse.git_sub(tokens)[0]
 
 
 def has_short_flag(args: list, ch: str) -> bool:
@@ -539,15 +486,23 @@ def embedded_scripts(command: str) -> list:
     return out
 
 
-def scan(command: str):
-    """Tokenize a command string and check each sub-command. Fail closed on error."""
+def scan(command: str, keep=None):
+    """Tokenize a command string and check each sub-command. Fail closed on error.
+    변수의 변형 확장(`${S%/*}`·`${S/x}`·`${PWD::1}` — 환경 변수 포함)은 결과를 모른다 — 모르는 값 후보와 루트에서 시작하는
+    모르는 값 후보를 모두 보고 하나라도 걸리면 막는다(0.40.0 독립 검증 4회차 R4-1)."""
     if not command:
         return None
-    command = shellparse.canonical(command)                # `\⏎` 제거 · `$'\x2f'` 풀기 · 복잡한 `${…}` 접기
+    if keep is None:
+        reason = scan(command, frozenset())
+        known = shellparse.bound_names(command) | frozenset(re.findall(r"\$\{!?([A-Za-z_]\w*)", command))
+        if reason or not known or shellparse.canonical(command, known) == shellparse.canonical(command):
+            return reason
+        return scan(command, known)
+    command = shellparse.canonical(command, keep)          # `\⏎` 제거 · `$'\x2f'` 풀기 · 복잡한 `${…}` 접기
     command, scripts = split_heredocs(command)
     scripts = scripts + embedded_scripts(command)
     for body in scripts:
-        reason = scan(body)
+        reason = scan(body, keep)
         if reason:
             return reason
     # 같은 명령 맨 앞에서 확정된 변수만 bash 처럼 펼친다(shellparse) — `S=/tmp/x && rm -rf $S` 의 대상은 깊은

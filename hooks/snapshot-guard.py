@@ -23,7 +23,6 @@
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 
@@ -39,22 +38,25 @@ GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree",
             "shortlog", "cat-file", "grep", "fetch", "remote", "config", "for-each-ref", "reflog", "help",
             "merge-base", "name-rev", "version"}
 FIND_WRITE = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
-# 복구 안내를 붙일 명령 — 그 외에는 조용히 찍는다(컨텍스트 소모를 줄인다)
-LOSSY = re.compile(r"\b(?:rm|shred|unlink|truncate|mv)\b|\bgit\b.*\b(?:reset|clean|checkout|restore|stash|switch)\b"
-                   r"|\bfind\b.*-delete")
+# 복구 안내를 붙일 명령 — 그 외에는 조용히 찍는다(컨텍스트 소모를 줄인다). 런처를 벗긴 뒤의 프로그램으로 본다
+# (`sudo rm`·`xargs rm`). 문자열 어디에 `rm` 이 있어도(`grep rm`) 알리던 정규식을 대신한다.
+LOSSY_HEADS = {"rm", "shred", "unlink", "truncate", "mv"}
+GIT_LOSSY = {"reset", "clean", "checkout", "restore", "stash", "switch"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ash", "eval"}
 
 
 def _read_only(seg: str, here: str, repo: str) -> bool:
-    toks = shellparse._tokens(seg)
+    toks = shellparse.tokens(seg)
     if not toks:
         return True
-    head = toks[0].rsplit("/", 1)[-1]
+    head = toks[0]
     for t in shellparse.write_targets(seg):
         p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
         if p == repo or p.startswith(repo + os.sep):
             return False                               # 레포 안에 쓴다
     if head == "git":
-        sub = next((t for t in toks[1:] if not t.startswith("-")), "")
+        i, _ = shellparse.git_sub(toks)
+        sub = toks[i] if i > 0 else ""
         if sub == "branch":
             return not any(t in ("-d", "-D", "-m", "-M", "--delete", "--move", "-f", "--force") for t in toks)
         if sub == "stash":
@@ -65,6 +67,28 @@ def _read_only(seg: str, here: str, repo: str) -> bool:
     if head in ("sed", "perl", "awk"):
         return not any(t.startswith("-") and "i" in t.lstrip("-")[:3] for t in toks[1:])
     return head in READ_ONLY
+
+
+def lossy(cmd: str, cwd: str) -> bool:
+    """복구 안내를 붙일 만큼 지우는 명령인가. 위치를 모르는 하위 명령은 알리지 않는다(셸 전용)."""
+    for seg, here in shellparse.segments(cmd, cwd, shell_only=True):
+        if here == shellparse.UNKNOWN:
+            continue
+        toks = shellparse.tokens(seg)
+        head = toks[0] if toks else ""
+        if head in LOSSY_HEADS:
+            return True
+        if head == "git":
+            i, _ = shellparse.git_sub(toks)
+            if i > 0 and toks[i] in GIT_LOSSY:
+                return True
+        if head == "find" and ("-delete" in toks or any(
+                t in ("-exec", "-execdir", "-ok") and k + 1 < len(toks) and toks[k + 1].rsplit("/", 1)[-1] in LOSSY_HEADS
+                for k, t in enumerate(toks))):
+            return True
+        if head in SHELLS and any(t in LOSSY_HEADS for t in toks[1:]):
+            return True                                # `bash -c 'rm -rf x'`
+    return False
 
 
 def _marker(repo: str):
@@ -79,6 +103,11 @@ def _repos(cmd: str, cwd: str, project: str) -> list:
     home_repo = os.path.realpath(home_repo) if home_repo else None
     repos, cache = [], {}
     for seg, here in shellparse.segments(cmd, cwd):
+        if here == shellparse.UNKNOWN:
+            # 위치를 모르면(`cd "$X" && rm -rf zz`) 세션 프로젝트 저장소를 찍는다 — 못 찍는 것보다 덜 위험하다
+            if home_repo and not _read_only(seg, home_repo, home_repo) and home_repo not in repos:
+                repos.append(home_repo)
+            continue
         here = os.path.realpath(here) if os.path.isdir(here) else here
         if here not in cache:
             r = gitsnap.repo_root(here) if os.path.isdir(here) else None
@@ -95,7 +124,7 @@ def _key(cmd: str) -> str:
     return hashlib.sha1(cmd.encode("utf-8", "replace")).hexdigest()
 
 
-def pre(cmd: str, repos: list) -> None:
+def pre(cmd: str, repos: list, cwd: str = ".") -> None:
     shas = []
     for r in repos:
         skipped = []
@@ -109,7 +138,7 @@ def pre(cmd: str, repos: list) -> None:
                                "excluded": [[p, n] for p, n in skipped[:200]]}, fh)
             except OSError:
                 pass
-    if shas and LOSSY.search(shellparse.prep(cmd)):
+    if shas and lossy(cmd, cwd):
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "additionalContext": (
@@ -171,7 +200,7 @@ def main() -> None:
     if data.get("hook_event_name") == "PostToolUse":
         post(cmd, repos)
     else:
-        pre(cmd, repos)
+        pre(cmd, repos, cwd)
     sys.exit(0)
 
 
