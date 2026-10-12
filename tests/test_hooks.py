@@ -653,6 +653,87 @@ class ReportFailuresTest(unittest.TestCase):
                          user_text("b"), tool_use("b", second), tool_result("b", False), say("됐습니다.")]
                 self.assertIsNone(self.stop(lines))
 
+    def test_read_only_tail_of_a_blocked_chain_is_not_a_reversal(self):
+        # 2026-10-11 실사용: 막힌 체인 뒤에 붙인 `| head`·`; git status` 가 '실패했던 명령'으로 잡혀 매 턴 거짓 정정을 요구했다
+        blocked_chain = "rm -rf cache; git status --short | head -3"
+        for later in ["git status --short", "head -3 x.log", "ls dist | head"]:
+            with self.subTest(later=later):
+                lines = [user_text("a"), tool_use("a", blocked_chain),
+                         tool_result("a", True, "PreToolUse:Bash hook error: rm -r 차단"), say("삭제가 차단됐습니다."),
+                         user_text("b"), tool_use("b", later), tool_result("b", False), say("확인했습니다.")]
+                self.assertIsNone(self.stop(lines))
+        # 체인의 원인 후보(읽기 전용이 아닌 명령)는 계속 추적한다
+        lines = [user_text("a"), tool_use("a", blocked_chain),
+                 tool_result("a", True, "PreToolUse:Bash hook error: rm -r 차단"), say("차단됐습니다."),
+                 user_text("b"), tool_use("b", "rm -rf cache"), tool_result("b", False), say("삭제했습니다.")]
+        self.assertTrue(blocked(self.stop(lines)))
+        # 혼자 실패한 읽기 전용 명령은 신원이다(체인이 아니면 원인이 분명하다)
+        lines = [user_text("a"), tool_use("a", "ls private"), tool_result("a", True, "permission denied"),
+                 say("볼 수 없습니다."), user_text("b"), tool_use("b", "ls private"), tool_result("b", False),
+                 say("봤습니다.")]
+        out = self.stop(lines)
+        self.assertIsNotNone(out)
+        self.assertIn("ls private", context(out))
+
+    def test_writing_commands_in_a_blocked_chain_stay_tracked(self):
+        # 0.36.2 리뷰: 이름만 보는 읽기 전용 목록이 `git branch -D`·`tee`·`sort -o`·`git remote remove` 까지 신원에서 지웠다
+        for cmd in ["git branch -D feat", "git remote remove origin", "tee notes.md", "sort -o out.txt in.txt",
+                    "git config user.name x", "gh pr create",
+                    # 독립 검증이 찾은 것: 잘린 모양에서 사라지는 `--output`, 출력 파일 인자, 파일 리다이렉트
+                    "git diff --binary --cached --output=f", "sort --check --debug --output=f in",
+                    "uniq in.txt out.txt", "grep x a.txt > notes.md",
+                    # 2차 독립 검증: 붙여 쓴 값·긴 옵션 축약·`-` 입력·명령 치환·특수 리다이렉트
+                    "sort -oout.txt in.txt", "sort --outp=o2.txt in.txt", "uniq - out.txt",
+                    "ls $(touch x)", "ls >| f.txt",
+                    # 3차 독립 검증: 벗겨진 따옴표를 다시 쪼개면 사라지던 리다이렉트·인자, stash 의 --output
+                    "grep x '#' > out.txt", "uniq 'a\\' out.txt",
+                    "git stash show --output=f.txt",
+                    # 4차 독립 검증: 변수·중괄호·글롭 확장이 만든 옵션·인자
+                    "sort ${X:--oout.txt} a.txt", "sort {-o,out.txt} a.txt", "uniq {a.txt,b.txt}",
+                    "git log {--output=o.txt,}", "uniq *.txt"]:
+            with self.subTest(cmd=cmd):
+                chain = f"{cmd}; git status --short | head -3"
+                lines = [user_text("a"), tool_use("a", chain),
+                         tool_result("a", True, "PreToolUse:Bash hook error: 차단"), say("차단됐습니다."),
+                         user_text("b"), tool_use("b", cmd), tool_result("b", False), say("했습니다.")]
+                out = self.stop(lines)                   # 되돌릴 수 있는 번복은 차단이 아니라 알림이다 — 신원으로 남는지만 본다
+                self.assertIsNotNone(out)
+                self.assertIn(cmd.split()[0], context(out))
+        # 이스케이프된 따옴표는 공용 파서가 체인을 잘못 나눠 신원 비교가 안 되므로 판정 함수로 직접 본다
+        gate = load_module("report-failures-gate.py")
+        self.assertEqual(gate.read_only_shapes("Bash", {"command": 'grep "a\\"b" x.txt > out.txt; git status'}), set())
+        # 5차 독립 검증: 함수 재정의·zsh 프로세스 치환·`$''(` — 원문 허용 문자 밖이면 어느 하위 명령도 읽기 전용이 아니다
+        for cmd in ["head() { touch b; }; head", "sort =(touch b)", "ls $''(touch x); git status", "ls *(e:touch x:)",
+                    # 6차: 빈 따옴표 인자, 같은 호출 안의 재바인딩, 셸이 공백으로 보지 않는 문자 뒤의 리다이렉트
+                    "git config user.name ''; git status", "PATH=/tmp/x; head a", "hash -p /bin/rm head; head v",
+                    "head in >\v/dev/null; ls"]:
+            with self.subTest(direct=cmd):
+                self.assertEqual(gate.read_only_shapes("Bash", {"command": cmd}), set())
+        # 같은 하위 명령의 조회 형태는 여전히 읽기 전용이다
+        for later in ["git branch --show-current", "git remote -v", "gh pr view 3", "gh pr view 3 --json title",
+                      "git config user.name", "git log --oneline -5", "git status --short 2>/dev/null",
+                      "sort -rn", "uniq -c", 'grep -n "a b" x.txt']:
+            with self.subTest(later=later):
+                chain = f"rm -rf cache; {later}"
+                lines = [user_text("a"), tool_use("a", chain),
+                         tool_result("a", True, "PreToolUse:Bash hook error: 차단"), say("차단됐습니다."),
+                         user_text("b"), tool_use("b", later), tool_result("b", False), say("확인했습니다.")]
+                self.assertIsNone(self.stop(lines))
+
+    def test_denial_words_in_command_output_are_not_a_denial(self):
+        # 실행 실패의 **출력**에 든 "차단"·"blocked" 는 막힘이 아니다(하네스 소스를 grep 하다 실패한 경우)
+        # 읽기 전용이 아닌 단일 명령으로 잰다 — 읽기 전용 제외 규칙이 결과를 가리지 않게
+        lines = [user_text("a"), tool_use("a", "npm test"),
+                 tool_result("a", True, "Exit code 1\nFAIL gate: rm -r 차단 — expected blocked"), say("실패했습니다."),
+                 user_text("b"), tool_use("b", "npm test"), tool_result("b", False), say("통과했습니다.")]
+        self.assertIsNone(self.stop(lines))
+        # 실행 시점 rm 가드의 거부는 실행 실패 형식이어도 막힘이다
+        lines = [user_text("a"), tool_use("a", "rm -rf cache"),
+                 tool_result("a", True, "Exit code 1\n[react-supabase-harness] rm -r 차단 — 실제 대상"),
+                 say("막혔습니다."), user_text("b"), tool_use("b", "rm -rf cache"), tool_result("b", False),
+                 say("삭제했습니다.")]
+        self.assertTrue(blocked(self.stop(lines)))
+
     def test_denied_command_shapes_are_normalized(self):
         # A37: 같은 명령을 이어 붙이거나 플래그 순서만 바꿔도 번복은 번복이다
         for second in ["rm -fr cache", "cd . && rm -rf cache", "sudo rm -rf cache"]:

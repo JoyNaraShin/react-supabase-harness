@@ -75,6 +75,87 @@ SUBCOMMAND_TOOLS = {
 DENIAL = re.compile(
     r"permission|denied|not allowed|blocked|refused|hook error|blocked by .{0,20}hook|권한|거부|차단|승인"
     r"|operation not permitted", re.IGNORECASE)
+# 출력 본문 전체에서 DENIAL 을 찾으면, "차단"이란 낱말이 든 파일을 grep 하다 실패한 명령까지 '막힌 호출'로 셌다
+# (2026-10-11 실사용 — 하네스 소스엔 이 낱말이 흔하다). 막힘은 **오류의 머리**(훅·권한·툴 오류의 형식)에서만 보고,
+# 일반 실행 실패(`Exit code N` 뒤 출력)는 OS 거부 문구나 실행 시점 rm 가드의 표식이 있을 때만 막힘이다.
+EXEC_DENIAL = re.compile(r"operation not permitted|permission denied|\[react-supabase-harness\]", re.IGNORECASE)
+
+
+def is_denial(content) -> bool:
+    text = str(content or "")
+    if re.match(r"\s*Exit code \d+", text):
+        return bool(EXEC_DENIAL.search(text))
+    return bool(DENIAL.search(text[:300]))
+
+
+# 여러 명령을 이은 호출이 실패하면 어느 명령이 원인인지 모른다. 읽기 전용 명령(`… | head`·`; git status`)은
+# 막히거나 '못 한다'고 단정할 대상이 아니므로 그런 호출의 신원에서 뺀다 — 혼자 실패했을 때만 신원이다.
+# 이름 목록 → 명령 모양 판정으로 두 번 좁혔지만 독립 검증이 매번 같은 쓰기를 다른 표기로 찾았다(붙여 쓴 값
+# `-oFILE`, 긴 옵션 축약 `--outp=`, `uniq - out`, 명령 치환, `<>`·`>|`). 셸 문법을 흉내 내 예외를 막는 대신
+# 판정을 뒤집는다 — 아래 허용 형태에 드는 하위 명령만 읽기 전용이다. 원문 검사(SHELL_SPECIAL)는 허용 문자 밖의
+# 셸 문법(리다이렉트·치환·변수·중괄호·글롭 확장·함수 정의)을 통째로 막는다. 그래서 하위 명령의 공백 분리
+# 토큰은 bash 의 인자를 잘게 쪼갤 뿐 새 옵션을 만들지 않고, 인자를 보는 명령(sort·uniq·date·git·gh)은 그 토큰으로 판정한다.
+# READ_ONLY_HEADS 는 파일을 쓰거나 임의 프로그램을 실행하는 옵션이 없어 인자를 보지 않는다(`diff -l` 이 고정 경로의
+# `pr` 을 실행하는 것만 예외로 둔다).
+READ_ONLY_HEADS = {"head", "tail", "grep", "wc", "cut", "tr", "ls", "stat", "du", "df", "pwd", "which", "type",
+                   "diff", "cmp", "basename", "dirname", "realpath", "readlink", "true", "false", "test",
+                   "sleep", "column", "nl", "fold", "rev", "od"}
+GIT_READ_ONLY = {"status", "log", "diff", "show", "rev-parse", "ls-files"}
+SORT_SAFE, UNIQ_SAFE = set("bdfghinMrRsuV"), set("cdiuDz")
+GIT_BRANCH_SAFE = {"-a", "-r", "-v", "-vv", "-l", "--list", "--show-current", "--all", "--remotes", "--verbose"}
+GIT_CONFIG_GET = {"--get", "--get-all", "--get-regexp", "--list", "-l"}
+# 판정은 호출 **원문**에서 한다. 공용 파서가 나눈 하위 명령은 따옴표·괄호·주석이 이미 벗겨져서, 그 텍스트를
+# 다시 쪼개면 리다이렉트·인자가 사라졌다(3차 독립 검증). 금지 문자를 하나씩 더하는 방식은 매번 다른 셸 문법
+# (함수 재정의 `head() {…}`, zsh `=(…)`·글롭 한정자, `$''(` — 5차 독립 검증)에 뚫렸으므로 허용 문자 집합으로
+# 뒤집는다. 원문(흔한 꼬리 `2>/dev/null`·`>/dev/null`·`2>&1` 만 뺀 것)에 ASCII 영문·숫자·공백·탭·줄바꿈과
+# `./:@%+,=|;&"'-` 밖의 문자가 하나라도 있으면 그 호출의 어느 하위 명령도 읽기 전용이 아니다. 유니코드 \w·\s 에는
+# 셸이 공백으로 보지 않는 문자(\v·\f·NBSP)가 있어 리다이렉트를 숨겼다(6차).
+HARMLESS_REDIRECT = re.compile(r"(?<=[ \t])(?:[12]?>[ \t]*/dev/null|2>&1)(?=[ \t\n;|&]|$)")
+SHELL_SPECIAL = re.compile(r"[^A-Za-z0-9_ \t\n./:@%+,=|;&\"'-]")
+# 문자는 허용 범위여도 판정을 무너뜨리는 원문 형태(6차 독립 검증):
+#  - 빈 따옴표 인자(`git config KEY ''` 는 쓰기) — 공용 파서가 빈 인자를 지워 토큰 수가 줄어든다
+#  - 같은 호출 안의 재바인딩(`PATH=…; head`·`hash -p … head`·`alias`) — 뒤의 읽기 전용 이름이 다른 프로그램이 된다
+REBINDING = re.compile(r"''|\"\"|(?:^|[;&|\n])[ \t]*(?:[A-Za-z_]\w*=|(?:hash|alias|unalias|export|set|unset|function|"
+                       r"source|eval|builtin|enable|typeset|declare|local|readonly)\b)|(?<=[ \t])[A-Za-z_]\w*=(?=\S*[ \t]+[a-z])")
+
+
+def is_read_only_segment(seg: str) -> bool:
+    toks = HARMLESS_REDIRECT.sub(" ", " " + seg).split()  # 원문 검사를 통과했으니 공백 분리가 bash 의 단어보다 잘게 쪼갤 뿐이다
+    if not toks or "/" in toks[0]:                       # `./tail` 은 그 이름의 다른 프로그램이다
+        return False
+    head, rest = toks[0], toks[1:]
+    shorts = [t for t in rest if t.startswith("-") and not t.startswith("--") and t != "-"]
+    pos = [t for t in rest if not t.startswith("-") or t == "-"]
+    longs = [t for t in rest if t.startswith("--")]
+    if head in READ_ONLY_HEADS:                          # 쓰거나 실행하는 옵션이 없는 명령 — 인자가 무엇이든 읽기다
+        return True
+    if head == "sort":                                   # `-o` 는 붙여 써도(`-oF`) 축약해도(`--outp`) 쓴다
+        return not longs and all(set(t[1:]) <= SORT_SAFE for t in shorts)
+    if head == "uniq":                                   # 두 번째 위치 인자는 출력 파일이다(`-` 도 위치 인자)
+        return not longs and len(pos) <= 1 and all(set(t[1:]) <= UNIQ_SAFE for t in shorts)
+    if head == "date":                                   # 위치 인자(BSD)·`-s`·`--set` 은 시계를 바꾼다
+        return all(t.startswith("+") or t in ("-u", "-R") for t in rest)
+    if head == "git" and rest:
+        sub, args = rest[0], rest[1:]                    # 전역 옵션(`-c`·`-C`)이 앞에 오면 인정하지 않는다
+        if sub in GIT_READ_ONLY:                         # `--ext-diff` 는 설정된 외부 프로그램을 실행한다
+            return not any("--output".startswith(t.split("=", 1)[0]) or t.startswith("--ext")
+                           for t in args if t.startswith("--"))
+        if sub == "branch":
+            return all(t in GIT_BRANCH_SAFE for t in args)
+        if sub == "remote":
+            return args in ([], ["-v"]) or (len(args) == 2 and args[0] in ("show", "get-url"))
+        if sub == "stash":
+            return args in (["list"], ["show"])
+        if sub == "config":
+            return (len(args) == 1 and "." in args[0] and not args[0].startswith("-")) or \
+                (bool(args) and args[0] in GIT_CONFIG_GET and not any(t.startswith("-") for t in args[1:]))
+        return False
+    if head == "gh" and len(rest) >= 2:                  # 조회 하위 명령이면 뒤의 값 옵션(`--json title`)은 읽기다
+        return rest[0] in ("run", "pr", "issue") and rest[1] in ("list", "view", "checks") and \
+            not any(t.startswith("--w") or (re.fullmatch(r"-[A-Za-z]+", t) and "w" in t) for t in rest)  # 브라우저
+    return False
+
+
 LEAD_STRIP = {"sudo", "doas", "command", "nohup", "time", "env", "nice", "stdbuf"}
 # 셸 문법어는 명령이 아니다 — `for d in x; do rm "$d"; done` 의 `done` 을 명령으로 세어
 # '실패했던 done 이 성공했다'는 거짓 정정 요구가 나왔다(2026-10-09 실사용).
@@ -132,6 +213,23 @@ def _segment_shape(seg: str):
     return " ".join(parts + flags + args)[:80]
 
 
+def read_only_shapes(tool: str, ti: dict) -> set:
+    """하위 명령 중 확실히 읽기만 하는 것의 모양."""
+    if tool != "Bash":
+        return set()
+    command = (ti.get("command") or "").strip()
+    if SHELL_SPECIAL.search(HARMLESS_REDIRECT.sub(" ", command)) or REBINDING.search(command):
+        return set()
+    ro, rw = set(), set()
+    for seg, _ in shellparse.segments(command, ".", shell_only=True):
+        short = _segment_shape(seg)
+        if short and is_read_only_segment(seg):
+            ro.add(short)
+        elif short:
+            rw.add(short)
+    return ro - rw                                       # 같은 모양에 쓰기 형태가 섞이면 신원으로 남긴다
+
+
 def cmd_shapes(tool: str, ti: dict) -> list:
     """추적 가능한 '명령 모양' 목록. `cd x && cmd` 처럼 이어진 명령은 하위 명령마다 본다."""
     if tool != "Bash":
@@ -140,6 +238,13 @@ def cmd_shapes(tool: str, ti: dict) -> list:
     # 변수는 펼친다(게이트끼리 같은 명령을 다르게 읽지 않게). `cd X` 는 신원이 아니라 segments 가 이미 뺀다.
     c = (ti.get("command") or "").strip()
     return [s for s in (_segment_shape(seg) for seg, _ in shellparse.segments(c, ".", shell_only=True)) if s]
+
+
+def segment_count(tool: str, ti: dict) -> int:
+    """하위 명령 수(신원이 없는 `python3 -`·`cd` 포함)."""
+    if tool != "Bash":
+        return 0
+    return len(shellparse.segments((ti.get("command") or "").strip(), ".", shell_only=True))
 
 
 def cmd_shape(tool: str, ti: dict):
@@ -191,7 +296,7 @@ def main() -> None:
 
     # ── 세션 전체를 훑어 "명령 모양 → 실패했었나"를 만든다.
     #    tool_use_id 로 결과를 호출에 되붙여야 모양을 알 수 있다.
-    shape_of, failed_shapes = {}, set()
+    shape_of, ro_of, seg_count, failed_shapes = {}, {}, {}, set()
     for line in lines:
         try:
             j = json.loads(line)
@@ -201,11 +306,16 @@ def main() -> None:
             for b in blocks(j.get("message")):
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     shape_of[b.get("id")] = cmd_shapes(b.get("name") or "", b.get("input") or {})
+                    ro_of[b.get("id")] = read_only_shapes(b.get("name") or "", b.get("input") or {})
+                    seg_count[b.get("id")] = segment_count(b.get("name") or "", b.get("input") or {})
         elif j.get("type") == "user":
             for b in blocks(j.get("message")):
                 if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error") \
-                        and DENIAL.search(str(b.get("content"))):
-                    failed_shapes.update(shape_of.get(b.get("tool_use_id")) or [])
+                        and is_denial(b.get("content")):
+                    shapes = shape_of.get(b.get("tool_use_id")) or []
+                    if seg_count.get(b.get("tool_use_id"), 0) > 1:   # 신원 수가 아니라 하위 명령 수 — `python3 …| tail` 은 둘이다
+                        shapes = [x for x in shapes if x not in ro_of.get(b.get("tool_use_id"), set())]
+                    failed_shapes.update(shapes)
 
     # ── 이번 턴: 실패 목록 + 성공한 명령 모양 + 최종 텍스트
     failures, succeeded, last_text = [], set(), []
