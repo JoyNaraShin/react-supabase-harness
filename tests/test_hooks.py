@@ -292,6 +292,18 @@ class DestructiveGitTest(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertIsNone(self.check(c))
 
+    def test_heredoc_delimiter_is_read_like_bash(self):
+        # 0.41.0 자체 점검(0.40.1 부터): 종료어를 이름 부분만 잡아 `<<EOF"X"`(실제 종료어 EOFX)·`<<E$X`(글자 그대로)의
+        # 뒤 명령을 본문으로 숨겼다. 파괴 가드도 shellparse 의 표식·종료어 판정을 쓴다
+        for c in ['cat <<EOF"X"\nEOFX\ngit push --force\nEOF', 'cat <<E$X\nE$X\ngit push --force\nE',
+                  'X=foo; cat <<E$X\nE$X\ngit push --force\nEfoo', 'cat <<\\EOF\nEOF\ngit reset --hard\nx']:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        # 데이터 본문은 여전히 명령이 아니다(종료 줄이 정확히 일치할 때)
+        for c in ["cat > notes.md <<'EOF'\n(git push --force 금지)\nEOF", 'cat > a <<"E O F"\ngit reset --hard\nE O F']:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+
     def test_approved_commit_bypasses_commit_only(self):
         self.assertIsNone(self.check("CLAUDE_COMMIT_APPROVED=1 git commit -m x"))
         self.assertTrue(denied(self.check("CLAUDE_COMMIT_APPROVED=1 git push --force")))
@@ -716,14 +728,16 @@ class ReportFailuresTest(unittest.TestCase):
                 self.assertIn(cmd.split()[0], context(out))
         # 이스케이프된 따옴표는 공용 파서가 체인을 잘못 나눠 신원 비교가 안 되므로 판정 함수로 직접 본다
         gate = load_module("report-failures-gate.py")
-        self.assertEqual(gate.read_only_shapes("Bash", {"command": 'grep "a\\"b" x.txt > out.txt; git status'}), set())
+        self.assertFalse(any(x.startswith("grep") for x in
+                             gate.read_only_shapes("Bash", {"command": 'grep "a\\"b" x.txt > out.txt; git status'})))
         # 5차 독립 검증: 함수 재정의·zsh 프로세스 치환·`$''(` — 원문 허용 문자 밖이면 어느 하위 명령도 읽기 전용이 아니다
         for cmd in ["head() { touch b; }; head", "sort =(touch b)", "ls $''(touch x); git status", "ls *(e:touch x:)",
                     # 6차: 빈 따옴표 인자, 같은 호출 안의 재바인딩, 셸이 공백으로 보지 않는 문자 뒤의 리다이렉트
-                    "git config user.name ''; git status", "PATH=/tmp/x; head a", "hash -p /bin/rm head; head v",
-                    "head in >\v/dev/null; ls"]:
+                    "git config user.name ''; git status", "PATH=/tmp/x; head a", "hash -p /bin/rm head; head v"]:
             with self.subTest(direct=cmd):
                 self.assertEqual(gate.read_only_shapes("Bash", {"command": cmd}), set())
+        # 셸이 공백으로 보지 않는 문자 뒤의 리다이렉트는 그 하위 명령만 자격을 잃는다(0.41.0 — 하위 명령 층)
+        self.assertNotIn("head in", gate.read_only_shapes("Bash", {"command": "head in >\v/dev/null; ls"}))
         # 같은 하위 명령의 조회 형태는 여전히 읽기 전용이다
         for later in ["git branch --show-current", "git remote -v", "gh pr view 3", "gh pr view 3 --json title",
                       "git config user.name", "git log --oneline -5", "git status --short 2>/dev/null",
@@ -734,6 +748,71 @@ class ReportFailuresTest(unittest.TestCase):
                          tool_result("a", True, "PreToolUse:Bash hook error: 차단"), say("차단됐습니다."),
                          user_text("b"), tool_use("b", later), tool_result("b", False), say("확인했습니다.")]
                 self.assertIsNone(self.stop(lines))
+
+    def test_read_only_tail_survives_unrelated_shell_syntax_in_the_same_call(self):
+        # 0.41.0 S4 — 실사용 오탐(2026-10-12 세션 재생 head 9·tail 7): 같은 호출의 **다른** 하위 명령에 `$S`·heredoc·
+        # `>>`·대입이 있다는 이유로 `| head`·`| tail`·`; git status` 까지 신원으로 남아 매 턴 거짓 정정을 요구했다
+        for chain, later in [("cd $S && python3 x.py 2>&1 | tail -5", "tail -5"),
+                             ("cat >> tests/t.py <<'PYEOF'\nx = 1\nPYEOF\ngit status --short | head -3", "git status --short"),
+                             ("S=/tmp/x && rm -rf $S && ls src | head", "head"),
+                             ("python3 - <<'EOF'\nprint(open('a').read())\nEOF\ngit log --oneline | head -5", "git log --oneline"),
+                             # 호출 층 거부 원인 실측 상위(빈 인자 124·치환 대입 156·출력 printf 35건 / 다중 하위 명령 1,520건)
+                             ("sed -i '' 's/a/b/' f.txt && git status --short | head -3", "head -3"),
+                             ("T=$(mktemp -d) && cp a $T && ls | head", "head"),
+                             ("printf '%s\\n' a b > list.txt; wc -l list.txt | tail -1", "tail -1"),
+                             ("git ls-files | while read f; do touch $f; done; git status --short", "git status --short")]:
+            with self.subTest(chain=chain):
+                lines = [user_text("a"), tool_use("a", chain),
+                         tool_result("a", True, "PreToolUse:Bash hook error: 차단"), say("차단됐습니다."),
+                         user_text("b"), tool_use("b", later), tool_result("b", False), say("확인했습니다.")]
+                self.assertIsNone(self.stop(lines))
+
+    def test_call_level_rebinding_voids_every_read_only_segment(self):
+        # 호출 층 — 같은 호출 안에서 뒤 하위 명령의 이름·출력·환경을 바꾸는 구조가 있으면 어느 것도 읽기 전용이 아니다
+        gate = load_module("report-failures-gate.py")
+        for cmd in ["X=1 head a", "LC_ALL=C sort a", "for PATH in /x; do head a; done", "{ head a; } > o; ls",
+                    "( head a ) > o; ls", "exec > o; head a", "read PATH; head a", ": ${PATH:=/x}; head a",
+                    "printf -v PATH x; head a", "trap 'touch b' EXIT; head a", '"eval" "head(){ :;}"; head a',
+                    "setopt noclobber; head a", "source ./x; head a", ". ./x; head a", "alias head=rm; head a",
+                    "GIT_EXTERNAL_DIFF=/tmp/x; git diff", "path=/tmp; head a", "f() { :; }; head a",
+                    "unset -f head; head a", "builtin cd /; head a", "export PATH; head a",
+                    "read -a PATH; head a", "while read PATH; do head a; done", "printf -v PATH x; ls",
+                    "X=$(a) PATH=/tmp head a", "GIT_DIR=/tmp/x && git status",
+                    # 0.41.0 독립 검증 1회차: 첫 낱말 앞에 대입·리다이렉트·수식어를 붙인 재바인딩, 값으로 만든 printf 옵션
+                    "x=1 export PATH=/tmp; head a", ">/dev/null export PATH=/x; head a", "2>&1 export PATH=/x; head a",
+                    "command export PATH=/x; head a", "time -p export PATH=/x; head a",
+                    "case x in x) export PATH=/x;; esac; head a", "noglob export PATH=/x; head a",
+                    "repeat 1 export PATH=/x; head a", "- export PATH=/x; head a", "O=-v; printf $O PATH x; head a",
+                    "{export,} PATH=/x; head a", 'ex""port PATH=/x; head a',
+                    # 0.40.1 부터: 덧붙이는 대입·배열 원소 대입
+                    "PATH+=:/tmp/evil; head a", "path[1]=/tmp/evil; head a"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(gate.read_only_shapes("Bash", {"command": cmd}), set())
+        # 안전한 이름의 문장 단위 대입은 다른 하위 명령의 자격을 지우지 않는다
+        self.assertIn("head", gate.read_only_shapes("Bash", {"command": "S=/tmp/x; touch $S/a; ls | head"}))
+        # 빈 인자가 있으면 인자 수를 보는 명령만 자격을 잃는다(`git config user.name ''` 는 쓰기)
+        ro = gate.read_only_shapes("Bash", {"command": "git config user.name ''; uniq a.txt; ls | head"})
+        self.assertIn("head", ro)
+        self.assertFalse(any(x.startswith(("git", "uniq")) for x in ro))
+
+    def test_shared_segment_layer_forms(self):
+        # 0.41.0 S4 — 스냅샷 재생(실제 3,038건)에서 새로 찍히던 상위 형태를 공용 층에 넣고, 같은 머리의 쓰기 변형은 막는다
+        sp = load_module("shellparse.py")
+        ro = lambda c: [sp.segment_read_only(g, sp.call_level(c)) for g, _ in sp.segments(c, "/tmp", shell_only=True)]
+        for cmd in ["sed -n 1,60p src/a.ts", "sed -n 12p a", "find src -name '*.md' -type f", "printf '%s\\n' a",
+                    "cat < in.txt", "cat <<EOF\nx\nEOF", "echo 완료", "grep -n x ~/a/*.json", 'grep "$BASE" f',
+                    "git -C sub log --oneline", "git grep -n foo", "gh pr diff 3", "wc -l <<< abc"]:
+            with self.subTest(read=cmd):
+                self.assertTrue(all(ro(cmd)), cmd)
+        for cmd in ["sed -i 1d a", "sed -n 1w out a", "sed -n 1e a", "sed 1,2p a", "sed -n 1p a > b",
+                    "find . -delete", "find . -execdir rm {} +", "find . -fprint0 out", "find . -okdir rm {} ;",
+                    "printf -v X a", "cat <> f", "cat < <(touch x)", "echo $(touch x)", "echo `touch x`",
+                    "git -c core.pager=x log", "git grep -Ovi foo", "git grep --open-files-in-pager=vi x",
+                    "head a > b", "./head a", "echo a \\\"; touch b",
+                    # 0.41.0 독립 검증 1회차: git grep -O 묶음·축약, find 의 변수 인자
+                    "git grep --op=rm x", "git grep --open-file=rm x", "git grep -iOrm x", "find . $X"]:
+            with self.subTest(write=cmd):
+                self.assertFalse(all(ro(cmd)), cmd)
 
     def test_denial_words_in_command_output_are_not_a_denial(self):
         # 실행 실패의 **출력**에 든 "차단"·"blocked" 는 막힘이 아니다(하네스 소스를 grep 하다 실패한 경우)
@@ -1409,6 +1488,28 @@ class SnapshotGuardTest(_RepoCase):
         files = _git(self.proj, "ls-tree", "-r", "--name-only", self.snapshots()[0]).stdout.split()
         self.assertIn("src/wip.ts", files)                       # 미추적 포함
         self.assertEqual(_git(self.proj, "diff", "--cached", "--name-only").stdout, "")  # 인덱스 무변경
+
+    def test_snapshot_uses_the_shared_read_only_layers(self):
+        # 0.41.0 S4 — 스냅샷의 '찍지 않아도 되는 명령' 판정은 정정 게이트와 같은 공용 두 층이다. 머리 이름만 보던
+        # 목록(env·open·jq·awk·gh api·git fetch)은 이제 찍는다. 레포 밖으로만 쓰는 리다이렉트는 여전히 건너뛴다
+        Path(self.proj, "src", "wip.ts").write_text("uncommitted\n")
+        for cmd in ["cat src/wip.ts | head", "echo done", "git status --short 2>/dev/null | head -3",
+                    "grep -rn x src > /tmp/o", "find src -name x", "sed -n 1p src/wip.ts"]:
+            with self.subTest(skip=cmd):
+                self.snap(cmd)
+                self.assertEqual(self.snapshots(), [])
+        for cmd in ["env rm -rf src/x", "find src -delete", "jq . a.json > src/a.json", "head() { :; }; head",
+                    "PATH=/tmp/x; ls", "sed -i 1d src/wip.ts", "echo x > src/new.ts", "awk 1 src/wip.ts",
+                    "git fetch origin",
+                    # 0.41.0 독립 검증 1회차(0.40.1 부터의 구멍): 명령 낱말 없는 리다이렉트, heredoc 종료어 오인
+                    ">src/wip.ts", "exec >src/wip.ts", "command exec >src/wip.ts",
+                    'cat <<EOF"X"\nEOFX\ntouch src/pwned\nEOF',
+                    # 자체 점검: 종료어의 `$` 는 펼치지 않는다(bash 는 글자 그대로)
+                    'cat <<E$X\nE$X\ntouch src/pwned\nE', 'X=foo; cat <<E$X\nE$X\ntouch src/pwned\nEfoo',
+                    'X=foo\ncat <<"$X"\n$X\ntouch src/pwned\nfoo']:
+            with self.subTest(snap=cmd):
+                snap = load_module("snapshot-guard.py")
+                self.assertTrue(snap._repos(cmd, self.proj, os.path.realpath(self.proj)))
 
     def test_snapshot_restores_after_destruction(self):
         Path(self.proj, "src", "old.ts").write_text("changed\n")
@@ -2520,4 +2621,17 @@ class ShellParseCompletenessTest(unittest.TestCase):
                         and not node.args and isinstance(node.func.value, ast.Name)
                         and node.func.value.id in ("seg", "segment", "sub")):
                     bad.append(f"{f.name}:{node.lineno} .split()")
+        self.assertEqual(bad, [])
+
+    def test_no_hook_keeps_its_own_read_only_table(self):
+        # 0.41.0 S4 — 읽기 전용 판정은 shellparse.call_admissible·segment_read_only 한 곳이다
+        import ast
+        heads = {"head", "tail", "grep", "wc", "cat", "ls", "stat", "status", "rev-parse", "ls-files"}
+        bad = []
+        for f in [p for p in HOOKS.glob("*.py") if p.name != "shellparse.py"]:
+            for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+                if isinstance(node, (ast.Set, ast.Tuple, ast.List)):
+                    strs = {e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+                    if len(strs & heads) >= 3:
+                        bad.append(f"{f.name}:{node.lineno}")
         self.assertEqual(bad, [])

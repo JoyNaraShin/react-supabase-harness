@@ -12,7 +12,14 @@ import os
 import re
 
 SHELLS = r"(?:bash|sh|zsh|dash|ash|eval)"
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
+# 종료어는 bash 처럼 메타문자 전까지의 낱말 전체에서 따옴표·백슬래시를 뗀 것이다(`$` 도 펼치지 않는다 — `<<E$X` 의
+# 종료어는 `E$X`). `<<EOF"X"` 의 종료어는 `EOFX` 다(이름 부분만 잡으면
+# 본문 속 `EOF` 줄에서 끝난 것으로 읽어 뒤 명령을 숨겼다 — 0.41.0 독립 검증). group(2) 는 heredoc_tag() 로 읽는다.
+_HEREDOC = re.compile(r"(?<!<)<<-?[ \t]*()((?![0-9])(?:[^\s;&|<>()'\"\\]|\\.|'[^'\n]*'|\"[^\"\n]*\")+)")
+
+
+def heredoc_tag(m) -> str:
+    return re.sub(r"\\(.)|['\"]", lambda x: x.group(1) or "", m.group(2))
 _FEEDS_SHELL = re.compile(r"(?:^|[\s|(])(?:\S*/)?(?:bash|sh|zsh|dash|ash|python3?|node|ruby|perl)\b[^|;&]*<<|\|\s*(?:\S*/)?(?:bash|sh|zsh)\b")
 # 남은 인자를 명령으로 실행하는 런처. 값 = 따로 값을 받는 옵션(그 값을 프로그램으로 읽지 않게).
 # 게이트마다 따로 두던 표(파괴 가드·정정 게이트·plan-first·설치 판정)를 여기 하나로 모았다(0.40.0) —
@@ -110,7 +117,7 @@ def strip_heredoc_bodies(cmd: str, shell_only: bool = False) -> str:
         i += 1
         if not m:                                          # 표식은 따옴표 밖(또는 따옴표 안 `$(…)`)에서만 찾았다
             continue
-        tag, body = m.group(2), []
+        tag, body = heredoc_tag(m), []
         dash = m.group(0).startswith("<<-")
         # 종료 줄은 bash 처럼 정확히 표식만(`<<-` 면 앞 탭 허용) — `EOF ` 를 끝으로 읽으면 뒤 본문이 명령이 되고
         # 그 안의 `'` 가 다음 줄들을 문자열로 덮었다
@@ -382,12 +389,19 @@ def expand_command(cmd: str, known: dict) -> str:
     lines, out, i = cmd.split("\n"), [], 0
     while i < len(lines):
         line = lines[i]
-        out.append(_expand_line(line, known))
+        # heredoc 종료어 낱말은 펼치지 않는다 — bash 는 `<<E$X`·`<<"$X"` 의 종료어를 글자 그대로 쓴다. 펼치면 종료어가
+        # 바뀌어 뒤 명령이 본문으로 숨었다(0.40.1 부터, 0.41.0 자체 점검)
+        tags = [mm.group(0) for mm in _HEREDOC.finditer(line)]
+        masked = _HEREDOC.sub(lambda mm: "\x00HD%d\x00" % tags.index(mm.group(0)), line) if tags else line
+        expanded = _expand_line(masked, known)
+        for k, t in enumerate(tags):
+            expanded = expanded.replace("\x00HD%d\x00" % k, t)
+        out.append(expanded)
         i += 1
         m = _HEREDOC.search(line)
         if not m:
             continue
-        while i < len(lines) and lines[i].strip() != m.group(2):  # 본문은 그대로(인용 heredoc 은 펼치지 않는다)
+        while i < len(lines) and lines[i].strip() != heredoc_tag(m):  # 본문은 그대로(인용 heredoc 은 펼치지 않는다)
             out.append(lines[i])
             i += 1
         if i < len(lines):
@@ -823,3 +837,194 @@ def write_targets(seg: str, whole: str = "") -> list:
                         and ("/" in x or "." in x or x.isalpha())]
             break
     return out
+
+
+# ── 읽기 전용 판정(두 층) — 정정 게이트와 스냅샷이 같은 판정을 쓴다(0.41.0 S4).
+# 이전에는 정정 게이트가 호출 원문 전체에 허용 문자 검사를 걸어 `$S`·`>>`·heredoc 이 하나만 있어도 같은 호출의
+# `| head` 까지 읽기 전용 자격을 잃었고(실사용 오탐), 스냅샷은 머리 이름만 보는 느슨한 목록(env·open·jq·git fetch)을
+# 따로 썼다. 두 층으로 나눈다:
+#  1) 호출 층 call_admissible — 같은 호출 안에서 **다른** 하위 명령의 뜻을 바꾸는 구조(재바인딩·묶음 리다이렉트·
+#     함수 정의·빈 인자)가 없는가. 있으면 어느 하위 명령도 읽기 전용이 아니다.
+#  2) 하위 명령 층 segment_read_only — segments() 가 낸 하위 명령(따옴표 벗김·확정 변수 펼침 뒤)이 허용 문자와
+#     허용 형태 안에 있는가. 리다이렉트·치환·변수·글롭은 그 하위 명령만 자격을 잃는다.
+# 허용 형태의 근거(독립 검증 1~6차가 깬 표기)는 tests/test_hooks.py `test_writing_commands_in_a_blocked_chain_stay_tracked`.
+READ_ONLY_HEADS = {"head", "tail", "grep", "wc", "cut", "tr", "ls", "stat", "du", "df", "pwd", "which", "type",
+                   "diff", "cmp", "basename", "dirname", "realpath", "readlink", "true", "false", "test",
+                   "sleep", "column", "nl", "fold", "rev", "od", "cat", "echo", "printf"}
+GIT_READ_ONLY = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "blame", "describe",
+                 "shortlog", "merge-base", "name-rev", "version", "for-each-ref", "grep"}
+SORT_SAFE, UNIQ_SAFE = set("bdfghinMrRsuV"), set("cdiuDz")
+GIT_BRANCH_SAFE = {"-a", "-r", "-v", "-vv", "-l", "--list", "--show-current", "--all", "--remotes", "--verbose"}
+GIT_CONFIG_GET = {"--get", "--get-all", "--get-regexp", "--list", "-l"}
+HARMLESS_REDIRECT = re.compile(r"(?<=[ \t])(?:[12]?>[ \t]*/dev/null|2>&1)(?=[ \t\n;|&]|$)")
+# 입력 리다이렉트·heredoc·here-string 은 읽기다. `<>`(읽고 쓰기)·`<(`(프로세스 치환)·`<&` 는 아니다.
+INPUT_REDIRECT = re.compile(r"(?:^|(?<=[ \t]))\d*<(?:<-?|<<)?(?![<>(&])[ \t]*[^\s<>()]+")
+FIND_ACTIONS_WRITE = ("-delete", "-exec", "-ok", "-fprint", "-fls")       # -execdir·-okdir·-fprint0 포함(접두)
+SED_PRINT_RANGE = re.compile(r"(?:\d+|\$)(?:,(?:\d+|\$))?p")
+# 하위 명령 텍스트의 허용 문자. 유니코드 \w·\s 에는 셸이 공백으로 보지 않는 문자(\v·NBSP)가 있어 ASCII 로 고정한다.
+SEGMENT_SPECIAL = re.compile(r"[^A-Za-z0-9_ \t./:@%+,=-]")
+# 문장 첫 낱말이면 뒤 하위 명령의 이름·출력·변수를 바꿀 수 있는 내장 명령(bash·zsh).
+REBINDERS = {"alias", "unalias", "hash", "export", "set", "unset", "source", ".", "eval", "builtin", "enable",
+             "disable", "typeset", "declare", "local", "readonly", "read", "mapfile", "readarray", "getopts",
+             "printf", "let", "trap", "exec", "setopt", "unsetopt", "emulate", "autoload", "functions", "zmodload",
+             "vared", "shopt", "function", "coproc", "command_not_found_handle"}
+# 이름만으로 명령 해석·낱말 분할을 바꾸는 변수(zsh 는 소문자 배열이 PATH 등과 묶여 있다).
+UNSAFE_NAMES = {"PATH", "IFS", "ENV", "HOME", "PS4", "CDPATH", "FPATH", "path", "fpath", "cdpath", "manpath",
+                "module_path", "mailpath", "psvar"}
+_ANY_ASSIGN = re.compile(r"([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=")   # `PATH+=:x`·`path[1]=x` 도 대입이다
+
+
+def _safe_name(name: str) -> bool:
+    """문장 단위 대입을 허용할 이름 — 짧거나 소문자 전용(셸 스크립트의 지역 변수 관례)이고 해석을 바꾸는 이름이 아닌 것.
+    길고 대문자인 이름(GIT_EXTERNAL_DIFF·LD_PRELOAD·BASH_ENV…)은 이미 export 된 환경 변수일 수 있어 인정하지 않는다."""
+    return (len(name) <= 4 or name.islower()) and name not in UNSAFE_NAMES
+
+
+def _statements(masked: str) -> list:
+    """최상위 문장들 — `$(…)`·`(…)` 안의 구분자에서는 자르지 않는다(치환·서브셸 안의 재바인딩은 바깥에 닿지 않는다)."""
+    out, cur, depth, i, n = [], [], 0, 0, len(masked)
+    while i < n:
+        c = masked[i]
+        if c == "(":
+            depth += 1
+        elif c == ")" and depth:
+            depth -= 1
+        elif depth == 0 and c in ";&|\n":
+            out.append("".join(cur))
+            cur = []
+            i += 2 if masked[i:i + 2] in ("&&", "||") else 1
+            continue
+        if depth == 0:
+            cur.append(c)
+        i += 1
+    out.append("".join(cur))
+    return out
+
+
+# 호출 층의 판정 단계 — FULL = 하위 명령 층을 그대로, ARGS_UNRELIABLE = 빈 인자(`''`)가 있어 하위 명령 텍스트의 인자 수를
+# 믿을 수 없다(인자를 보지 않는 명령만 읽기 전용), NONE = 어느 하위 명령도 읽기 전용이 아니다.
+NONE, ARGS_UNRELIABLE, FULL = 0, 1, 2
+
+
+def call_level(cmd: str) -> int:
+    """호출 층 — 이 호출 안에 다른 하위 명령의 뜻을 바꾸는 구조가 없는가."""
+    text = join_continuations(decode_ansi_quotes(cmd))
+    body = strip_heredoc_bodies(text, shell_only=True)
+    masked = _mask_data_quotes(_strip_comments(body))
+    if re.search(r"(?<!\$)\(", masked):                  # 서브셸·함수 정의·zsh `=(…)`·글롭 한정자·산술 — 리다이렉트가 묶음에 붙는다
+        return NONE
+    if re.search(r"(?:^|[\s;&|])[{}](?=[\s;&|]|$)", masked):   # `{ head; } > out`
+        return NONE
+    if re.search(r"\$\{[^}]*[=!]", masked) or _sources(masked):    # 펼치며 대입·간접 참조, `.`/`source`
+        return NONE
+    # 재바인딩 낱말은 문장 첫 위치만 보지 않는다 — 앞에 대입·리다이렉트·수식어(`x=1 export`·`2>&1 export`·`command export`·
+    # `time -p export`·`case x in x) export`·zsh `noglob`/`nocorrect`/`repeat 1`/`-`)를 붙이면 첫 낱말이 바뀌었다
+    # (0.41.0 독립 검증 1회차). 최상위 문장의 **모든** 낱말을 따옴표·백슬래시를 떼고 중괄호를 펼쳐 본다 — 인자 자리의
+    # `grep export f` 도 막히지만(보수) 놓치는 것보다 낫다.
+    for stmt in _statements(masked):
+        raw = [re.sub(r"[\"'\\]", "", w) for w in re.split(r"[\s()]+", stmt) if w]
+        ws = []
+        for w in raw:
+            if "{" in w:
+                exp = brace_expand(w)
+                if exp is None:
+                    return NONE                          # 다 펼치지 못하면 의심한다
+                ws += exp
+            else:
+                ws.append(w)
+        for k, w in enumerate(ws):
+            nxt = ws[k + 1] if k + 1 < len(ws) else ""
+            if w == "printf":                            # 출력만 하는 printf 는 흔하다 — `-v NAME`(값으로 만든 `$O` 포함)만 변수에 쓴다
+                if nxt.startswith("-") or re.search(r"[$`]", nxt):
+                    return NONE
+                continue
+            if w == "read":                              # `while read f` — 받는 이름이 모두 안전하면 바깥 해석을 바꾸지 않는다
+                names = [x for x in ws[k + 1:] if not x.startswith("-")]
+                if any(o.startswith("-") and set(o[1:]) & set("apdutnN") for o in ws[k + 1:]) or \
+                        not names or not all(re.fullmatch(r"[A-Za-z_]\w*", x) and _safe_name(x) for x in names):
+                    return NONE
+                continue
+            if w in REBINDERS:
+                return NONE
+            if w in ("for", "select") and not _safe_name(nxt):
+                return NONE
+            am = _ANY_ASSIGN.match(w)
+            if am and not _safe_name(am.group(1)):
+                return NONE                              # 해석을 바꾸는 이름의 대입(문장 단위든 앞에 붙인 것이든, `+=`·`[i]=` 포함)
+    if re.search(r"''|\"\"", body):                     # 빈 인자 — segments() 가 지워 인자 수가 줄어든다(`git config K ''`)
+        return ARGS_UNRELIABLE
+    return FULL
+
+
+def call_admissible(cmd: str) -> bool:
+    return call_level(cmd) != NONE
+
+
+def segment_read_only(seg: str, level: int = FULL) -> bool:
+    """하위 명령 층 — segments() 가 낸 하위 명령이 확실히 읽기만 하는가(허용 문자 + 허용 형태).
+    level = 같은 호출의 call_level. ARGS_UNRELIABLE 이면 인자를 보지 않는 명령만 인정한다."""
+    if level == NONE:
+        return False
+    text = INPUT_REDIRECT.sub(" ", HARMLESS_REDIRECT.sub(" ", " " + seg))
+    m = re.match(r"[ \t]*([^ \t]*)", text)
+    head = m.group(1) if m else ""
+    if not head or SEGMENT_SPECIAL.search(head):         # `./tail` 은 그 이름의 다른 프로그램이다. 머리는 ASCII 낱말만
+        return False
+    if SEGMENT_SPECIAL.search(text):                     # 리다이렉트·치환·변수·글롭·틸드·이스케이프
+        # 인자를 보지 않는 명령(과 find 의 이름 패턴)은 인자가 무엇으로 펼쳐지든 읽기다 — 글롭·틸드·이스케이프·단순 변수·
+        # 비ASCII(`grep "$BASE" ~/x/*.json`·`echo 완료`)는 인정한다. 명령 치환(`$(`·백틱 — segments() 에서 `$ ` 로 남는다)·
+        # 쓰기 리다이렉트·남은 따옴표(파서가 따옴표 짝을 놓친 신호)는 여전히 아니다.
+        rest = text[m.end():]
+        if head != "find":                               # find 는 인자가 동작이다 — `find . $X`(X=-delete)
+            rest = re.sub(r"\$(?:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})", "", rest)
+        if head not in READ_ONLY_HEADS | {"find"} or re.search(r"[$`<>\"'(){}|;&#!\x00-\x08\x0b\x0c\x0e-\x1f]", rest):
+            return False
+    toks = text.split()
+    head, rest = toks[0], toks[1:]
+    shorts = [t for t in rest if t.startswith("-") and not t.startswith("--") and t != "-"]
+    pos = [t for t in rest if not t.startswith("-") or t == "-"]
+    longs = [t for t in rest if t.startswith("--")]
+    if head == "printf":                                 # `-v NAME` 은 변수에 쓴다
+        return not any(t.startswith("-") and "v" in t for t in rest[:2])
+    if head in READ_ONLY_HEADS:                          # 쓰거나 실행하는 옵션이 없는 명령 — 인자가 무엇이든 읽기다
+        return True
+    if head == "find":                                   # 지우기·실행·파일 출력 동작이 없으면 읽기다
+        return not any(t.startswith(FIND_ACTIONS_WRITE) for t in rest)
+    if level != FULL:
+        return False
+    if head == "sed":                                    # `sed -n 10,20p f` — 줄 범위 출력만(`w`·`e` 명령·-i 없음)
+        return all(t in ("-n", "-E", "-r", "-u", "-s") for t in shorts) and "-n" in shorts and not longs and \
+            len(pos) >= 1 and bool(SED_PRINT_RANGE.fullmatch(pos[0]))
+    if head == "sort":                                   # `-o` 는 붙여 써도(`-oF`) 축약해도(`--outp`) 쓴다
+        return not longs and all(set(t[1:]) <= SORT_SAFE for t in shorts)
+    if head == "uniq":                                   # 두 번째 위치 인자는 출력 파일이다(`-` 도 위치 인자)
+        return not longs and len(pos) <= 1 and all(set(t[1:]) <= UNIQ_SAFE for t in shorts)
+    if head == "date":                                   # 위치 인자(BSD)·`-s`·`--set` 은 시계를 바꾼다
+        return all(t.startswith("+") or t in ("-u", "-R") for t in rest)
+    if head == "git" and rest:
+        while len(rest) >= 2 and rest[0] == "-C":        # `-C DIR` 은 위치만 바꾼다. `-c`(설정 주입)·그 밖의 전역 옵션은 인정하지 않는다
+            rest = rest[2:]
+        if not rest:
+            return False
+        sub, args = rest[0], rest[1:]
+        if sub == "grep" and any((re.fullmatch(r"-[A-Za-z0-9]+", t) and "O" in t) or
+                                 (t.startswith("--o") and "--open-files-in-pager".startswith(t.split("=", 1)[0]))
+                                 for t in args):
+            return False                                 # 결과를 지정한 프로그램(페이저)으로 연다 — 묶음(`-iOrm`)·축약(`--op=`) 포함
+        if sub in GIT_READ_ONLY:                         # `--ext-diff` 는 설정된 외부 프로그램을 실행한다
+            return not any("--output".startswith(t.split("=", 1)[0]) or t.startswith("--ext")
+                           for t in args if t.startswith("--"))
+        if sub == "branch":
+            return all(t in GIT_BRANCH_SAFE for t in args)
+        if sub == "remote":
+            return args in ([], ["-v"]) or (len(args) == 2 and args[0] in ("show", "get-url"))
+        if sub == "stash":
+            return args in (["list"], ["show"])
+        if sub == "config":
+            return (len(args) == 1 and "." in args[0] and not args[0].startswith("-")) or \
+                (bool(args) and args[0] in GIT_CONFIG_GET and not any(t.startswith("-") for t in args[1:]))
+        return False
+    if head == "gh" and len(rest) >= 2:                  # 조회 하위 명령이면 뒤의 값 옵션(`--json title`)은 읽기다
+        return rest[0] in ("run", "pr", "issue") and rest[1] in ("list", "view", "checks", "diff", "status") and \
+            not any(t.startswith("--w") or (re.fullmatch(r"-[A-Za-z]+", t) and "w" in t) for t in rest)  # 브라우저
+    return False

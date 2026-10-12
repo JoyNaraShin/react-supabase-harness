@@ -23,6 +23,7 @@ Claude Code 플러그인이다. 플러그인을 설치한 **다른 프로젝트*
 | `scripts/eval-report.py` | eval 결과 집계 — 모델·케이스별 Δ·pass^k, 기준 미만이면 exit 1 | 측정 |
 | `scripts/purge-snapshots.py` | 하네스 스냅샷 ref·표식 정리(기본 dry-run, 실행은 사용자) | 유지보수 |
 | `scripts/ablate.py` | 훅별 ablation — 훅 하나를 뺀 사본으로 관련 케이스 재실행 | 측정 |
+| `scripts/bench-snapshot.py` | 스냅샷 판정 비율·훅 지연을 두 트리(기본 HEAD vs 작업 트리)로 비교 | 측정 |
 | `tests/` | 훅 계약 테스트 · 종합 스크립트 테스트 · eval 집계 테스트 · 뮤테이션 테스트 | 측정 |
 
 가이드 = 행동 전에 방향을 준다(피드포워드). 센서 = 행동 뒤에 잡는다(피드백). 계산형 = 결정론, 추론형 = 모델 판단.

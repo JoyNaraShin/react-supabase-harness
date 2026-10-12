@@ -430,8 +430,6 @@ def check(tokens: list):
     return None
 
 
-HEREDOC = re.compile(
-    r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1([^\n]*)\n(.*?)\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
 SHELL_SINK = re.compile(r"\|\s*(?:\S*/)?(?:bash|sh|zsh|dash|ash)\b|\|\s*xargs\b")
 
 
@@ -458,16 +456,27 @@ def split_heredocs(command: str):
     `cat <<EOF | sh` — the body IS a script and is still scanned.
     Returns (command_without_bodies, scripts_to_scan).
     """
-    scripts = []
-
-    def repl(m):
-        line_start = command.rfind("\n", 0, m.start()) + 1
-        before, after = command[line_start:m.start()], m.group(3)
+    # 표식·종료어 판정은 shellparse 와 같다(따옴표·주석 밖의 표식, 종료어 = 메타문자 전까지의 낱말에서 따옴표를 뗀 것,
+    # 종료 줄은 정확히 일치·`<<-` 면 앞 탭 허용). 자체 정규식은 `<<EOF"X"`·`<<E$X` 의 종료어를 `EOF`·`E` 로 읽어 뒤의
+    # `rm -rf ~` 를 본문으로 숨겼다(0.41.0 자체 점검 — 0.40.1 부터).
+    scripts, out, lines, i, q = [], [], command.split("\n"), 0, ()
+    while i < len(lines):
+        line = lines[i]
+        q, m = shellparse._quote_state(line, q)
+        i += 1
+        if not m:
+            out.append(line)
+            continue
+        tag, dash, body = shellparse.heredoc_tag(m), m.group(0).startswith("<<-"), []
+        while i < len(lines) and (lines[i].lstrip("\t") if dash else lines[i]) != tag:
+            body.append(lines[i])
+            i += 1
+        i += 1                                           # 종료 줄
+        before, after = line[:m.start()], line[m.end():]
         if _feeds_shell(before) or SHELL_SINK.search(after):
-            scripts.append(m.group(4))
-        return "<<" + m.group(2) + after + "\n"
-
-    return HEREDOC.sub(repl, command), scripts
+            scripts.append("\n".join(body))
+        out.append(before + "<<" + tag + after)
+    return "\n".join(out), scripts
 
 
 SINGLE_QUOTED = re.compile(r"'[^']*'")

@@ -90,70 +90,9 @@ def is_denial(content) -> bool:
 
 # 여러 명령을 이은 호출이 실패하면 어느 명령이 원인인지 모른다. 읽기 전용 명령(`… | head`·`; git status`)은
 # 막히거나 '못 한다'고 단정할 대상이 아니므로 그런 호출의 신원에서 뺀다 — 혼자 실패했을 때만 신원이다.
-# 이름 목록 → 명령 모양 판정으로 두 번 좁혔지만 독립 검증이 매번 같은 쓰기를 다른 표기로 찾았다(붙여 쓴 값
-# `-oFILE`, 긴 옵션 축약 `--outp=`, `uniq - out`, 명령 치환, `<>`·`>|`). 셸 문법을 흉내 내 예외를 막는 대신
-# 판정을 뒤집는다 — 아래 허용 형태에 드는 하위 명령만 읽기 전용이다. 원문 검사(SHELL_SPECIAL)는 허용 문자 밖의
-# 셸 문법(리다이렉트·치환·변수·중괄호·글롭 확장·함수 정의)을 통째로 막는다. 그래서 하위 명령의 공백 분리
-# 토큰은 bash 의 인자를 잘게 쪼갤 뿐 새 옵션을 만들지 않고, 인자를 보는 명령(sort·uniq·date·git·gh)은 그 토큰으로 판정한다.
-# READ_ONLY_HEADS 는 파일을 쓰거나 임의 프로그램을 실행하는 옵션이 없어 인자를 보지 않는다(`diff -l` 이 고정 경로의
-# `pr` 을 실행하는 것만 예외로 둔다).
-READ_ONLY_HEADS = {"head", "tail", "grep", "wc", "cut", "tr", "ls", "stat", "du", "df", "pwd", "which", "type",
-                   "diff", "cmp", "basename", "dirname", "realpath", "readlink", "true", "false", "test",
-                   "sleep", "column", "nl", "fold", "rev", "od"}
-GIT_READ_ONLY = {"status", "log", "diff", "show", "rev-parse", "ls-files"}
-SORT_SAFE, UNIQ_SAFE = set("bdfghinMrRsuV"), set("cdiuDz")
-GIT_BRANCH_SAFE = {"-a", "-r", "-v", "-vv", "-l", "--list", "--show-current", "--all", "--remotes", "--verbose"}
-GIT_CONFIG_GET = {"--get", "--get-all", "--get-regexp", "--list", "-l"}
-# 판정은 호출 **원문**에서 한다. 공용 파서가 나눈 하위 명령은 따옴표·괄호·주석이 이미 벗겨져서, 그 텍스트를
-# 다시 쪼개면 리다이렉트·인자가 사라졌다(3차 독립 검증). 금지 문자를 하나씩 더하는 방식은 매번 다른 셸 문법
-# (함수 재정의 `head() {…}`, zsh `=(…)`·글롭 한정자, `$''(` — 5차 독립 검증)에 뚫렸으므로 허용 문자 집합으로
-# 뒤집는다. 원문(흔한 꼬리 `2>/dev/null`·`>/dev/null`·`2>&1` 만 뺀 것)에 ASCII 영문·숫자·공백·탭·줄바꿈과
-# `./:@%+,=|;&"'-` 밖의 문자가 하나라도 있으면 그 호출의 어느 하위 명령도 읽기 전용이 아니다. 유니코드 \w·\s 에는
-# 셸이 공백으로 보지 않는 문자(\v·\f·NBSP)가 있어 리다이렉트를 숨겼다(6차).
-HARMLESS_REDIRECT = re.compile(r"(?<=[ \t])(?:[12]?>[ \t]*/dev/null|2>&1)(?=[ \t\n;|&]|$)")
-SHELL_SPECIAL = re.compile(r"[^A-Za-z0-9_ \t\n./:@%+,=|;&\"'-]")
-# 문자는 허용 범위여도 판정을 무너뜨리는 원문 형태(6차 독립 검증):
-#  - 빈 따옴표 인자(`git config KEY ''` 는 쓰기) — 공용 파서가 빈 인자를 지워 토큰 수가 줄어든다
-#  - 같은 호출 안의 재바인딩(`PATH=…; head`·`hash -p … head`·`alias`) — 뒤의 읽기 전용 이름이 다른 프로그램이 된다
-REBINDING = re.compile(r"''|\"\"|(?:^|[;&|\n])[ \t]*(?:[A-Za-z_]\w*=|(?:hash|alias|unalias|export|set|unset|function|"
-                       r"source|eval|builtin|enable|typeset|declare|local|readonly)\b)|(?<=[ \t])[A-Za-z_]\w*=(?=\S*[ \t]+[a-z])")
-
-
-def is_read_only_segment(seg: str) -> bool:
-    toks = HARMLESS_REDIRECT.sub(" ", " " + seg).split()  # 원문 검사를 통과했으니 공백 분리가 bash 의 단어보다 잘게 쪼갤 뿐이다
-    if not toks or "/" in toks[0]:                       # `./tail` 은 그 이름의 다른 프로그램이다
-        return False
-    head, rest = toks[0], toks[1:]
-    shorts = [t for t in rest if t.startswith("-") and not t.startswith("--") and t != "-"]
-    pos = [t for t in rest if not t.startswith("-") or t == "-"]
-    longs = [t for t in rest if t.startswith("--")]
-    if head in READ_ONLY_HEADS:                          # 쓰거나 실행하는 옵션이 없는 명령 — 인자가 무엇이든 읽기다
-        return True
-    if head == "sort":                                   # `-o` 는 붙여 써도(`-oF`) 축약해도(`--outp`) 쓴다
-        return not longs and all(set(t[1:]) <= SORT_SAFE for t in shorts)
-    if head == "uniq":                                   # 두 번째 위치 인자는 출력 파일이다(`-` 도 위치 인자)
-        return not longs and len(pos) <= 1 and all(set(t[1:]) <= UNIQ_SAFE for t in shorts)
-    if head == "date":                                   # 위치 인자(BSD)·`-s`·`--set` 은 시계를 바꾼다
-        return all(t.startswith("+") or t in ("-u", "-R") for t in rest)
-    if head == "git" and rest:
-        sub, args = rest[0], rest[1:]                    # 전역 옵션(`-c`·`-C`)이 앞에 오면 인정하지 않는다
-        if sub in GIT_READ_ONLY:                         # `--ext-diff` 는 설정된 외부 프로그램을 실행한다
-            return not any("--output".startswith(t.split("=", 1)[0]) or t.startswith("--ext")
-                           for t in args if t.startswith("--"))
-        if sub == "branch":
-            return all(t in GIT_BRANCH_SAFE for t in args)
-        if sub == "remote":
-            return args in ([], ["-v"]) or (len(args) == 2 and args[0] in ("show", "get-url"))
-        if sub == "stash":
-            return args in (["list"], ["show"])
-        if sub == "config":
-            return (len(args) == 1 and "." in args[0] and not args[0].startswith("-")) or \
-                (bool(args) and args[0] in GIT_CONFIG_GET and not any(t.startswith("-") for t in args[1:]))
-        return False
-    if head == "gh" and len(rest) >= 2:                  # 조회 하위 명령이면 뒤의 값 옵션(`--json title`)은 읽기다
-        return rest[0] in ("run", "pr", "issue") and rest[1] in ("list", "view", "checks") and \
-            not any(t.startswith("--w") or (re.fullmatch(r"-[A-Za-z]+", t) and "w" in t) for t in rest)  # 브라우저
-    return False
+# 읽기 전용 판정은 스냅샷과 같은 공용 두 층이다(shellparse.call_admissible·segment_read_only). 이름 목록 → 모양
+# 판정 → 원문 허용 문자로 좁혀 온 이력과 깬 표기는 shellparse 주석과 tests/test_hooks.py 에 있다.
+is_read_only_segment = shellparse.segment_read_only
 
 
 # 셸 문법어(`do`·`done`…)와 런처는 shellparse.strip_launchers 가 벗긴다 — `for d in x; do rm "$d"; done` 의
@@ -211,12 +150,13 @@ def read_only_shapes(tool: str, ti: dict) -> set:
     if tool != "Bash":
         return set()
     command = (ti.get("command") or "").strip()
-    if SHELL_SPECIAL.search(HARMLESS_REDIRECT.sub(" ", command)) or REBINDING.search(command):
+    level = shellparse.call_level(command)
+    if level == shellparse.NONE:
         return set()
     ro, rw = set(), set()
     for seg, _ in shellparse.segments(command, ".", shell_only=True):
         short = _segment_shape(seg)
-        if short and is_read_only_segment(seg):
+        if short and shellparse.segment_read_only(seg, level):
             ro.add(short)
         elif short:
             rw.add(short)

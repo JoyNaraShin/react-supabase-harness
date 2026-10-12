@@ -69,7 +69,7 @@
 
 | 훅 | 이벤트 | 하는 일 | 동작 방식 |
 |---|---|---|---|
-| `snapshot-guard` | PreToolUse · PostToolUse · Bash | 읽기 전용으로 확인되지 않은 명령 직전에 작업 트리(미추적 포함·gitignore 제외, 미추적 비밀 파일·5MB 초과 제외)를 `refs/harness/snapshots/` 에 남긴다. 커밋 메시지에는 명령 원문 대신 해시만 적는다. 같은 트리면 새로 만들지 않고 최근 30개만 보존. 프로젝트의 저장소에만 쓴다. 명령이 끝나면 스냅샷 대비 사라진 파일을 결과로 찾아 복구 명령과 함께 알린다 — 스크립트 안의 `git clean` 처럼 명령 문자열에 드러나지 않는 삭제도 잡는다 | 차단하지 않음 · 알림 · 1,300 파일 레포에서 250–450ms |
+| `snapshot-guard` | PreToolUse · PostToolUse · Bash | 읽기 전용으로 확인되지 않은 명령(판정은 정정 게이트와 같은 `shellparse` 공용 두 층) 직전에 작업 트리(미추적 포함·gitignore 제외, 미추적 비밀 파일·5MB 초과 제외)를 `refs/harness/snapshots/` 에 남긴다. 커밋 메시지에는 명령 원문 대신 해시만 적는다. 같은 트리면 새로 만들지 않고 최근 30개만 보존. 프로젝트의 저장소에만 쓴다. 명령이 끝나면 스냅샷 대비 사라진 파일을 결과로 찾아 복구 명령과 함께 알린다 — 스크립트 안의 `git clean` 처럼 명령 문자열에 드러나지 않는 삭제도 잡는다 | 차단하지 않음 · 알림 · 1,300 파일 레포에서 250–450ms(1회 로컬 관측 — 재현: `scripts/bench-snapshot.py`) |
 | `block-destructive-git` | PreToolUse · Bash | 직접 `git commit`·강제 push·`push --delete/--mirror/--no-verify`·`reset --hard`·`clean -f`·`branch -D`·작업 폐기 checkout/restore·이력 재작성, 시스템 최상위·홈 직속·상위(`../`)·현재 디렉터리·변수만 있는 경로·세션 프로젝트와 그 상위·세션 프로젝트 저장소의 `.git` 의 `rm -r`, 그리고 앞의 위험 경로(프로젝트·`.git` 제외)의 `find -delete` 차단(홈 아래 다른 프로젝트처럼 깊은 절대경로는 막지 않는다). `env`·`sudo`·`nohup` 같은 런처 접두어, 여러 줄 명령, `do`/`then` 복합문, `bash -c`·`eval`·셸이 읽는 heredoc 안도 검사 | **차단** · 파싱 실패·내부 오류 시 fail-closed. 커밋은 `/commit` 승인 경로만 통과하고, 훅이 기록한 마지막 verify 가 지금 HEAD 위 FAIL 이면 그것도 막는다 |
 | `gate-engine` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash, PostToolUse · Bash | `gates/rules.jsonc` + 프로젝트 `.claude/gates/rules.jsonc` 룰 집행. 룰의 `after` 에 든 도구는 실행 뒤 결과(예: `package.json` 에 새로 들어온 금지 의존성)로 다시 본다. 에이전트가 탈출구 파일·룰 파일을 스스로 만들거나 바꾸는 것은 코드로 차단 | **차단/알림** · 룰마다 탈출구(사용자가 켠다) |
 | `block-impl-delegation` | PreToolUse · Write/Edit/MultiEdit/NotebookEdit/Bash (서브에이전트 호출만) | 서브에이전트가 코드 영역(`src/`·`supabase/`·`package.json` 등, 데이터로 정의)을 쓰려는 호출 차단. 리서치 산출·plan 작성·기계 실행은 통과 | **차단** · 사용자가 `delegation.writers` 에 넣은 타입만 예외 |
@@ -238,7 +238,7 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 75개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 79개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조 | PR 마다(CI) |
 | 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 27케이스에서 플러그인을 켠 arm 과 끈 arm 의 점수 차(Δ). `claude plugin eval` 사용 | 수동 · CI 수동 잡(사용량 소모) |
 | 집계 | `python3 scripts/eval-report.py evals/results/*.json [--min-pass-k 0.9]` | 모델·케이스별 Δ 와 pass^k(k 런 모두 통과). 실행되지 못한 런(한도·샌드박스 거부·인증 실패)은 점수에서 뺀다 — 세면 "아무 일도 없음"이 가짜 만점이 된다. 기준 미만이거나 유효 런이 없는 케이스가 있으면 exit 1 | eval 뒤 |

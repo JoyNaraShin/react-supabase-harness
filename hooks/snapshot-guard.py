@@ -30,14 +30,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gitsnap  # noqa: E402
 import shellparse  # noqa: E402
 
-READ_ONLY = {"ls", "cat", "head", "tail", "wc", "grep", "egrep", "rg", "ag", "echo", "printf", "pwd", "which",
-             "type", "file", "stat", "du", "df", "tree", "diff", "less", "more", "jq", "true", "false", "test",
-             "date", "whoami", "uname", "env", "printenv", "sort", "uniq", "cut", "basename", "dirname",
-             "realpath", "readlink", "sleep", "column", "nl", "md5", "shasum", "sha256sum", "open", "gh"}
-GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "blame", "describe",
-            "shortlog", "cat-file", "grep", "fetch", "remote", "config", "for-each-ref", "reflog", "help",
-            "merge-base", "name-rev", "version"}
-FIND_WRITE = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
 # 복구 안내를 붙일 명령 — 그 외에는 조용히 찍는다(컨텍스트 소모를 줄인다). 런처를 벗긴 뒤의 프로그램으로 본다
 # (`sudo rm`·`xargs rm`). 문자열 어디에 `rm` 이 있어도(`grep rm`) 알리던 정규식을 대신한다.
 LOSSY_HEADS = {"rm", "shred", "unlink", "truncate", "mv"}
@@ -45,28 +37,19 @@ GIT_LOSSY = {"reset", "clean", "checkout", "restore", "stash", "switch"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ash", "eval"}
 
 
-def _read_only(seg: str, here: str, repo: str) -> bool:
-    toks = shellparse.tokens(seg)
-    if not toks:
-        return True
-    head = toks[0]
-    for t in shellparse.write_targets(seg):
+def _read_only(seg: str, here: str, repo: str, level: int = shellparse.FULL) -> bool:
+    """찍지 않아도 되는 하위 명령인가 — 정정 게이트와 같은 공용 두 층(shellparse)에 레포 안 쓰기 대상 검사를 더한다.
+    level = 같은 호출의 호출 층 판정(shellparse.call_level). 모르는 명령은 찍는다."""
+    for t in shellparse.write_targets(seg):          # 명령 낱말이 없는 `>src/a`·`exec >src/a` 도 쓴다 — 빈 명령 판정보다 먼저
         p = os.path.normpath(os.path.join(here, os.path.expanduser(t)))
         if p == repo or p.startswith(repo + os.sep):
             return False                               # 레포 안에 쓴다
-    if head == "git":
-        i, _ = shellparse.git_sub(toks)
-        sub = toks[i] if i > 0 else ""
-        if sub == "branch":
-            return not any(t in ("-d", "-D", "-m", "-M", "--delete", "--move", "-f", "--force") for t in toks)
-        if sub == "stash":
-            return toks[-1] in ("list", "show") or "list" in toks
-        return sub in GIT_READ
-    if head == "find":
-        return not any(t in FIND_WRITE for t in toks)
-    if head in ("sed", "perl", "awk"):
-        return not any(t.startswith("-") and "i" in t.lstrip("-")[:3] for t in toks[1:])
-    return head in READ_ONLY
+    if not shellparse.tokens(seg):
+        return True
+    # 레포 밖으로만 쓰는 리다이렉트(`grep x src > /tmp/o`)는 스냅샷이 지킬 대상이 아니다 — 그 리다이렉트만 빼고
+    # 공용 하위 명령 층에 넣는다(정정 게이트에서는 같은 리다이렉트가 쓰기 신원이다). 모르는 대상(`> $X`)은 위에서
+    # 레포 안 상대 경로로 풀려 이미 찍는다.
+    return shellparse.segment_read_only(shellparse.REDIRECT.sub(" ", seg), level)
 
 
 def lossy(cmd: str, cwd: str) -> bool:
@@ -102,10 +85,11 @@ def _repos(cmd: str, cwd: str, project: str) -> list:
     home_repo = gitsnap.repo_root(project)
     home_repo = os.path.realpath(home_repo) if home_repo else None
     repos, cache = [], {}
+    level = shellparse.call_level(cmd)
     for seg, here in shellparse.segments(cmd, cwd):
         if here == shellparse.UNKNOWN:
             # 위치를 모르면(`cd "$X" && rm -rf zz`) 세션 프로젝트 저장소를 찍는다 — 못 찍는 것보다 덜 위험하다
-            if home_repo and not _read_only(seg, home_repo, home_repo) and home_repo not in repos:
+            if home_repo and not _read_only(seg, home_repo, home_repo, level) and home_repo not in repos:
                 repos.append(home_repo)
             continue
         here = os.path.realpath(here) if os.path.isdir(here) else here
@@ -115,7 +99,7 @@ def _repos(cmd: str, cwd: str, project: str) -> list:
         repo = cache[here]
         if not repo or not (repo == home_repo or repo == project or repo.startswith(project + os.sep)):
             continue
-        if not _read_only(seg, here, repo) and repo not in repos:
+        if not _read_only(seg, here, repo, level) and repo not in repos:
             repos.append(repo)
     return repos
 
