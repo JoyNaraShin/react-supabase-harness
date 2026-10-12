@@ -2034,6 +2034,29 @@ class RuntimeRmGuardInstallTest(unittest.TestCase):
                                        env=env, cwd=home)
                     self.assertEqual(p.returncode, 1, p.stderr)
 
+    def test_other_version_wrapper_on_path_does_not_loop(self):
+        # 플러그인 업데이트 뒤 PATH 에 옛 버전 bin 이 남으면 두 래퍼가 서로를 execv 해 rm 이 끝나지 않았다(0.36.0–0.42.0).
+        # 옛 래퍼는 표지 검사가 없으므로 그쪽이 다시 이 래퍼를 골라도 HARNESS_RM_WRAPPED 가드로 멈춰야 한다.
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.realpath(d)
+            old = Path(home, "old-bin")
+            old.mkdir()
+            shutil.copy(ROOT / "bin" / "rm", old / "rm")      # 다른 디렉터리의 같은 래퍼 = 다른 버전
+            text = (old / "rm").read_text()
+            (old / "rm").write_text(text.replace("and not _is_wrapper(p)", "and True")
+                                        .replace('if os.environ.get("HARNESS_RM_WRAPPED")', "if False"))  # 옛 버전 흉내
+            (old / "rm").chmod(0o755)
+            Path(home, "victim").write_text("x")
+            for first, second in ((ROOT / "bin", old), (old, ROOT / "bin")):
+                with self.subTest(first=first.name):
+                    Path(home, "victim").write_text("x")
+                    env = {"PATH": f"{first}:{second}:/usr/bin:/bin", "HOME": home, "HARNESS_PROJECT_DIR": home}
+                    p = subprocess.run(["bash", "-c", "rm -f victim"], capture_output=True, text=True, env=env,
+                                       cwd=home, timeout=20)
+                    # 옛 래퍼가 앞이어도 그것이 고르는 다음 rm 이 새 래퍼이므로 새 래퍼에서 끊긴다
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertFalse(Path(home, "victim").exists())
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 관할(hooks/scope.py) — T0 는 어디서나, T1 은 하네스 관할 프로젝트에서만. 같은 입력의 쌍으로 본다.

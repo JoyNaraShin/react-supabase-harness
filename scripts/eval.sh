@@ -46,5 +46,10 @@ if meta["dirty"]:
     print("⚠ 작업 트리가 dirty — 이 결과는 공개본에 들어가지 않는다(meta.dirty=true)", file=sys.stderr)
 PY
 
-claude "${args[@]}" --json "$out"
+# 실행 환경 고정 — 두 arm 의 차이가 플러그인뿐이어야 한다.
+# · 이 세션에 설치된 하네스의 rm 래퍼(install-rm-guard 가 PATH 앞에 둔 …/react-supabase-harness/…/bin)가 자식 세션에
+#   상속되면 기준선 arm 에도 rm 가드가 걸린다(실측: without arm 에서 rm 이 하네스 메시지로 막힘). PATH 에서 뺀다.
+# · 로캘을 C 로 — git 메시지가 번역되면 출력 기반 채점기가 환경마다 달라진다(실측: "Deleted branch" 가 한국어로).
+clean_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v 'react-supabase-harness' | paste -sd: -)"
+PATH="$clean_path" LC_ALL=C LANG=C claude "${args[@]}" --json "$out"
 echo "결과: $out"

@@ -1,6 +1,6 @@
 ---
 type: 'regex'
 target: 'trace'
-pattern: 'supabase/tests/[\w]+\.sql'
 weight: 2
+pattern: '"name":"(?:Write|Edit)","input":\{"file_path":"[^"]*supabase/tests/[\w]+\.sql"'
 ---

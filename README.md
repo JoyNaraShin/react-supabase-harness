@@ -238,10 +238,10 @@ claude --plugin-dir /path/to/react-supabase-harness
 | 층 | 명령 | 무엇을 보장하나 | 언제 |
 |---|---|---|---|
 | 훅 계약 | `python3 -m unittest discover -s tests -v` | 입력별 차단/알림/침묵 계약. 우회(미탐)와 정상 작업(오탐) 코퍼스를 함께 둔다. 모든 차단 메시지에 `다음 행동:` 이 있는지도 검사 | PR 마다(CI, Python 3.9·3.12) |
-| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 79개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 |
+| 뮤테이션 | `HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation` | 차단 술어 79개를 하나씩 무력화했을 때 계약 테스트가 실패하는가 — 테스트가 게이트를 실제로 지키는지의 근거 | 술어를 바꿀 때 · 주간 CI |
 | 자기 점검 | `python3 scripts/doctor.py` | 죽은 참조·버전 드리프트·스킬 규격(500줄·목차·frontmatter YAML)·eval 구조(케이스마다 축 태그 하나) | PR 마다(CI) |
 | 회전 시드 퍼즈 | CI 가 실행마다 `HARNESS_FUZZ_SEED` 를 바꿔 `tests.test_shell_differential` 3,000건 | 고정 시드가 못 보는 새 입력에서 파서와 진짜 bash 가 같은 rm 인자를 내는가. 실패하면 로그의 시드로 재현 | PR 마다(CI, 3.12) |
-| 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 32케이스에서 플러그인을 켠 arm 과 끈 arm 을 돌린다(`claude plugin eval`). 결과 옆에 출처 `*.meta.json`(git SHA·dirty 여부·플러그인 버전·모델·runs·Claude Code 버전)을 남긴다 | 수동 · CI 수동 잡(사용량 소모) |
+| 행동 eval | `scripts/eval.sh` (`MODEL=haiku RUNS=3` 등) | eval 스위트 35케이스에서 플러그인을 켠 arm 과 끈 arm 을 돌린다(`claude plugin eval`). 결과 옆에 출처 `*.meta.json`(git SHA·dirty 여부·플러그인 버전·모델·runs·Claude Code 버전)을 남긴다 | 수동 · CI 수동 잡(사용량 소모) |
 | 집계 | `python3 scripts/eval-report.py [--gate] [--publish DIR] evals/results/*.json` | 축별 표 — **efficacy**(지시받은 금지 행동을 막는가: Δ·pass^k), **organic**(지시 없는 유혹에서 사고를 줄이는가: Δ·pass^k), **skill**(스킬·리뷰어 준수: 절대 통과율, Δ 없음), **overblock**(정상 작업: with 실패 0 단언). 기준선이 시도조차 안 한 케이스(`attempt-` 채점기)는 "측정 안 됨", 유효 런이 `--min-k`(기본 3) 미만이면 "측정 부족". 실행 못 한 런은 빼고 표기, 슬래시 프롬프트가 안 펼쳐진 런은 실패로 센다. `--publish` 는 meta 가 모두 같은 SHA 의 clean 트리일 때만 `evals/published/<버전>/` 에 원자료와 보고서를 쓴다 | eval 뒤 |
 | 훅별 ablation | `python3 scripts/ablate.py --model haiku --runs 3` | 훅 하나를 뺀 사본으로 그 훅이 지키는 케이스를 다시 돌려 기여도를 잰다. `claude plugin eval` 은 플러그인 전체 on/off 만 지원해서 직접 만들었다 | 훅을 더하거나 뺄 때(사용량 소모) |
 

@@ -38,6 +38,19 @@ jobs:
           echo "HARNESS_FUZZ_SEED=$seed (재현: HARNESS_FUZZ_SEED=$seed HARNESS_FUZZ_N=3000 python -m unittest tests.test_shell_differential)"
           HARNESS_FUZZ_SEED="$seed" HARNESS_FUZZ_N=3000 python -m unittest tests.test_shell_differential
 
+  mutation:
+    # 차단 술어를 하나씩 무력화해 계약 테스트가 잡는지 본다(약 30분) — PR 마다는 무거워서 주간·수동만.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: mutation
+        run: HARNESS_MUTATION=1 python -m unittest -v tests.test_mutation
+
   manifest:
     # Claude Code 최신판의 플러그인 매니페스트 규칙으로 검증한다(인증 불필요). 주간 실행이 규칙 변화를 잡는다.
     runs-on: ubuntu-latest

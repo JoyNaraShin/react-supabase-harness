@@ -98,7 +98,9 @@ def main() -> int:
         v = variant(h)
         cut = run(v, c, a.model, a.runs, outdir / f"no-{h}-{c.replace('*', 'x')}.json")
         shutil.rmtree(v.parent, ignore_errors=True)
-        for name, scores in cache_full[c].items():
+        names = sorted(set(cache_full[c]) | set(cut)) or [c]   # 둘 다 실패하면 글롭 이름으로라도 행을 남긴다
+        for name in names:
+            scores = cache_full[c].get(name) or []
             fs = sum(scores) / len(scores) if scores else None
             cs = cut.get(name) or []
             cm = sum(cs) / len(cs) if cs else None
@@ -115,7 +117,7 @@ def main() -> int:
     if failed:
         print(f"\n⚠ {failed}행은 유효한 런이 없다(사용량 한도·오류) — 한도가 풀린 뒤 `--hooks` 로 그 훅만 다시 돌린다")
     print(f"\n결과: {outdir}")
-    return 0
+    return 1 if failed else 0     # 측정 실패를 성공 종료로 삼키지 않는다(감사 F28·F17)
 
 
 if __name__ == "__main__":

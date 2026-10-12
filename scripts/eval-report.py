@@ -141,7 +141,8 @@ def classify(r: dict):
 
 def aggregate(paths: list, latest: bool = False, min_k: int = 3) -> dict:
     acc = defaultdict(lambda: {"with": [], "without": [], "not_run": 0, "runner": 0, "reasons": set(),
-                               "axis": "미분류", "flags": {"with": [], "without": []}})
+                               "axis": "미분류", "flags": {"with": [], "without": []},
+                               "cost": {"with": 0.0, "without": 0.0}, "secs": [], "turns": []})
     partial = []
     keep = latest_only(paths) if latest else None
     for p in paths:
@@ -153,6 +154,12 @@ def aggregate(paths: list, latest: bool = False, min_k: int = 3) -> dict:
                 continue
             e = acc[(model, c["name"])]
             e["axis"] = axis_of(c)
+            # 비용·시간은 실행 못 한 런까지 센다 — 쓴 사용량은 점수와 무관하게 쓴 것이다(감사 F26)
+            e["cost"][arm] += float(r.get("costUsd") or 0) + float(r.get("judgeCostUsd") or 0)
+            if r.get("durationSeconds") is not None:
+                e["secs"].append(float(r["durationSeconds"]))
+            if r.get("turns") is not None:
+                e["turns"].append(float(r["turns"]))
             k = classify(r)
             if k[0] != "ok":
                 e["not_run"] += 1
@@ -183,6 +190,9 @@ def aggregate(paths: list, latest: bool = False, min_k: int = 3) -> dict:
                      "temptWithout": tempt, "attemptWith": rate("with", "attempt"), "firedWith": rate("with", "fired"),
                      "measured": measured,
                      "notRun": e["not_run"], "runnerArtifacts": e["runner"],
+                     "costWith": round(e["cost"]["with"], 4), "costWithout": round(e["cost"]["without"], 4),
+                     "meanSeconds": round(sum(e["secs"]) / len(e["secs"]), 1) if e["secs"] else None,
+                     "meanTurns": round(sum(e["turns"]) / len(e["turns"]), 1) if e["turns"] else None,
                      "reasons": sorted(e["reasons"])})
     return {"rows": rows, "partial": partial, "minK": min_k}
 
@@ -263,6 +273,11 @@ def markdown(res: dict) -> str:
         nm = [r["case"] for r in rows if r["axis"] == ax and not r["measured"]]
         if nm:
             out.append(f"- {ax} 측정 안 됨(기준선 시도율 0) {len(nm)}케이스: {', '.join(nm)}")
+    cw, cwo = sum(r["costWith"] for r in rows), sum(r["costWithout"] for r in rows)
+    if cw or cwo:
+        secs = [r["meanSeconds"] for r in rows if r["meanSeconds"] is not None]
+        out.append(f"- 비용(정가 환산 추정, 판정자 포함): with ${cw:.2f} · without ${cwo:.2f}"
+                   + (f" · 케이스 평균 런 시간 {sum(secs) / len(secs):.0f}초" if secs else ""))
     if res["partial"]:
         out.append(f"- ⚠ partial 결과(비용 상한·중단) 포함: {', '.join(res['partial'])}")
     return "\n".join(out) + "\n"

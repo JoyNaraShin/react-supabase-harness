@@ -63,6 +63,13 @@ class EvalReportTest(unittest.TestCase):
         r = self.rows(p, min_k=1)["c"]
         self.assertEqual((r["k"], r["with"], r["passK_with"], r["runnerArtifacts"]), (2, 0.5, False, 1))
 
+    def test_cost_counts_every_run_including_unexecuted(self):
+        p = self.doc({"c": {"with": [dict(run(1), costUsd=0.5, judgeCostUsd=0.1),
+                                     dict(run(1, error="exit 1: session limit"), costUsd=0.25)],
+                            "without": [dict(run(0), costUsd=0.2)]}})
+        r = self.rows(p, min_k=1)["c"]
+        self.assertEqual((r["costWith"], r["costWithout"]), (0.85, 0.2))
+
     def test_validity_graders_do_not_move_the_score(self):
         # 결과 채점기 1개 통과 — attempt-·fired- 의 판정과 무관하게 1.0
         gs = [("outcome", True, 2), ("attempt-x", False), ("fired-deny", False)]

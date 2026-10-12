@@ -24,15 +24,29 @@ def _policy():
     return rmpolicy
 
 
+def _is_wrapper(p: str) -> bool:
+    """다른 버전의 이 래퍼인가. 플러그인을 업데이트한 세션은 PATH 에 옛 버전 bin 이 남는다 — 그것을 진짜 rm 으로
+    고르면 두 래퍼가 서로를 execv 해 끝나지 않는다(실측: rm -f 하나가 1시간 넘게 돌며 CPU 를 씀)."""
+    try:
+        with open(p, "rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and b"install-rm-guard" in head
+
+
 def real_rm() -> str:
     """이 래퍼가 아닌 rm. 테스트는 HARNESS_REAL_RM 으로 기록기를 끼운다 — 판정은 그 전에 끝나므로 우회 수단이 아니다."""
     if os.environ.get("HARNESS_REAL_RM"):
         return os.environ["HARNESS_REAL_RM"]
+    if os.environ.get("HARNESS_RM_WRAPPED"):   # 다른 래퍼가 판정을 마치고 넘긴 호출 — 다시 래퍼를 찾지 않는다
+        return "/bin/rm"
     for d in os.environ.get("PATH", "").split(os.pathsep):
         if not d or os.path.realpath(d) == HERE:
             continue
         p = os.path.join(d, "rm")
-        if os.path.isfile(p) and os.access(p, os.X_OK) and os.path.realpath(p) != os.path.realpath(__file__):
+        if (os.path.isfile(p) and os.access(p, os.X_OK) and os.path.realpath(p) != os.path.realpath(__file__)
+                and not _is_wrapper(p)):
             return p
     return "/bin/rm"
 
@@ -88,6 +102,7 @@ def main(argv: list) -> int:
                 "(절대 경로 호출은 이 래퍼를 지나지 않고, 에이전트의 호출은 정적 가드가 따로 검사한다).\n")
             return 1
     rm = real_rm()
+    os.environ["HARNESS_RM_WRAPPED"] = "1"     # 옛 버전 래퍼(표지 검사가 없는)로 넘어가도 그쪽이 다시 이 래퍼를 부르면 멈춘다
     os.execv(rm, [rm] + argv)
     return 127
 
