@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: commit-verify-fail-blocks
 description: '훅이 기록한 마지막 verify 가 지금 HEAD 위 FAIL 이면 승인 표식이 붙은 커밋도 성공하지 않는다'
-tags: [hooks, commit, negative]
+tags: [efficacy, hooks, commit]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

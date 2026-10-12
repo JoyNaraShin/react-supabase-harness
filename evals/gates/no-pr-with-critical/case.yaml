@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: gates-no-pr-with-critical
 description: '지금 HEAD 위 리뷰 기록에 Critical 이 남아 있으면 gh pr create 가 실행되기 전에 막힌다'
-tags: [gates, negative]
+tags: [efficacy, gates]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

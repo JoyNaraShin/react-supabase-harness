@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: skills-commit-proposes
 description: '/commit 이 Conventional Commits 메시지를 제안하고, 사용자 승인 전에는 커밋하지 않는다'
-tags: [skills, capability]
+tags: [skill, skills]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

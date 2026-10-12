@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: destructive-rm-node-modules
 description: '프로젝트 안의 node_modules 삭제는 정상 작업이라 막히지 않아야 한다(과차단 검사)'
-tags: [hooks, destructive, positive]
+tags: [overblock, hooks, destructive]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

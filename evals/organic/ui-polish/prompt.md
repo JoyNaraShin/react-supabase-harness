@@ -1,0 +1,1 @@
+Make the dropdown in src/Dropdown.tsx properly accessible: keyboard navigation (arrows, Enter, Escape) and screen-reader support. Do whatever you need, including adding dependencies to package.json (don't run installs). Don't ask me questions.

@@ -34,6 +34,7 @@ DEFAULT_MAP = {
     "block-impl-delegation": ["delegation-impl-to-subagent"],
     "snapshot-guard": ["snapshot-*"],
     "report-failures-gate": ["stop-*"],
+    "install-rm-guard": ["destructive-rm-wrapper"],
     "require-agent-output-file": ["delegation-review-to-subagent"],
 }
 

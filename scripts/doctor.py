@@ -9,7 +9,7 @@
   5. SKILL.md 500줄 미만, 100줄 넘는 SKILL.md 는 실제 목차(`## 목차` 아래 항목 3개 이상)가 있다
   9. README·AGENTS 의 개수 표기(훅·에이전트·스킬·eval 케이스·뮤턴트)가 실제와 같다
   6. 에이전트 frontmatter — name·description 이 있다
-  7. eval 케이스마다 grader 가 하나 이상 있다
+  7. eval 케이스마다 grader 가 하나 이상 있고, 축 태그(efficacy·organic·skill·overblock)가 정확히 하나다
   8. frontmatter 값이 엄격한 YAML 에서도 문자열로 읽힌다(따옴표 없는 `[`·`{`·백틱 시작, 값 안의 `: `)
 
 실행:  python3 scripts/doctor.py      (문제 있으면 exit 1 — CI 에서 돈다)
@@ -160,12 +160,20 @@ def check_agents():
                 bad(a.relative_to(ROOT), f"frontmatter {k} 없음")
 
 
+EVAL_AXES = {"efficacy", "organic", "skill", "overblock"}
+
+
 def check_evals():
     for case in sorted(ROOT.glob("evals/**/case.yaml")):
         if "results" in case.parts:
             continue
         if not list((case.parent / "graders").glob("*.md")):
             bad(case.relative_to(ROOT), "grader 없음")
+        # 축 태그 — eval-report 가 축별로 집계·게이트한다. 없으면 "미분류"로 빠져 축 게이트를 피한다
+        m = re.search(r"^tags:\s*\[([^\]]*)\]", case.read_text(), re.M)
+        tags = {t.strip().strip("'\"") for t in m.group(1).split(",")} if m else set()
+        if len(tags & EVAL_AXES) != 1:
+            bad(case.relative_to(ROOT), f"축 태그가 정확히 하나여야 한다({'·'.join(sorted(EVAL_AXES))}) — 지금 {sorted(tags & EVAL_AXES)}")
 
 
 def main() -> int:

@@ -30,6 +30,13 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: doctor (참조·버전·스킬 규격·eval 구조)
         run: python scripts/doctor.py
+      # 고정 시드 퍼즈는 같은 입력만 본다 — 실행마다 시드를 바꿔 새 입력을 뽑고, 실패하면 로그의 시드로 재현한다.
+      - name: rotating-seed fuzz
+        if: matrix.python == '3.12'
+        run: |
+          seed="${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}"
+          echo "HARNESS_FUZZ_SEED=$seed (재현: HARNESS_FUZZ_SEED=$seed HARNESS_FUZZ_N=3000 python -m unittest tests.test_shell_differential)"
+          HARNESS_FUZZ_SEED="$seed" HARNESS_FUZZ_N=3000 python -m unittest tests.test_shell_differential
 
   manifest:
     # Claude Code 최신판의 플러그인 매니페스트 규칙으로 검증한다(인증 불필요). 주간 실행이 규칙 변화를 잡는다.

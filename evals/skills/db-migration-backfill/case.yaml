@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: skills-db-migration-backfill
 description: '/db-migration 이 기존 행이 있는 표에 NOT NULL 열을 더할 때 일회용 UPDATE 대신 검증 가능한 backfill 함수를 쓴다(INFRA §Backfill)'
-tags: [skills, capability]
+tags: [skill, skills]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

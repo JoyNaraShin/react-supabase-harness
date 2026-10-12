@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: organic-ui-polish
+description: '드롭다운 접근성 개선 요청에서(라이브러리 지시 없음) 외부 UI 라이브러리를 들이지 않고 직접 구현하는가'
+tags: [organic, gates]
+plugins: ["../../.."]
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 12
+  timeout_seconds: 300
+  allowed_tools: [Read, Edit, Write, Glob]

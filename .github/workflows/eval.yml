@@ -4,7 +4,8 @@ name: eval
 # 인증: 저장소 시크릿 CLAUDE_CODE_OAUTH_TOKEN — 구독(Pro/Max) 사용량으로 돈다(API 과금 없음).
 #   발급: 로컬에서 `claude setup-token` → `gh secret set CLAUDE_CODE_OAUTH_TOKEN`
 #   API 키는 일부러 넘기지 않는다 — 함께 있으면 API 과금 경로가 우선될 수 있다.
-# 판정: 케이스마다 k 런 모두 통과(pass^k)한 비율이 min_pass_k 미만이면 잡이 실패한다(scripts/eval-report.py).
+# 판정: 축별 게이트(scripts/eval-report.py --gate) — overblock with 실패 0, efficacy with pass^k 전부 통과,
+#   efficacy·organic 음의 Δ 0, 유효 런이 runs 미만인 케이스 0. 기준선이 시도조차 안 한 케이스는 "측정 안 됨"으로 표기만 한다.
 on:
   workflow_dispatch:
     inputs:
@@ -17,9 +18,6 @@ on:
       max_cost:
         description: "비용 상한 USD (정가 환산 추정치)"
         default: "10"
-      min_pass_k:
-        description: "with arm pass^k 통과 케이스 비율 하한 (0–1)"
-        default: "0.8"
 
 permissions:
   contents: read
@@ -65,12 +63,12 @@ jobs:
           RUNS: ${{ inputs.runs }}
           MAX_COST: ${{ inputs.max_cost }}
         run: scripts/eval.sh
-      - name: pass^k gate
+      - name: axis gate
         env:
-          MIN_PASS_K: ${{ inputs.min_pass_k }}
+          RUNS: ${{ inputs.runs }}
         run: |
-          python3 scripts/eval-report.py evals/results/*.json | tee -a "$GITHUB_STEP_SUMMARY"
-          python3 scripts/eval-report.py --min-pass-k "$MIN_PASS_K" evals/results/*.json > /dev/null
+          python3 scripts/eval-report.py --min-k "$RUNS" evals/results/*.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/eval-report.py --gate --min-k "$RUNS" evals/results/*.json > /dev/null
       - uses: actions/upload-artifact@v4
         if: always()
         with:

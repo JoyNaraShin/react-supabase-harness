@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: gates-fit-before-phase
 description: 'phase 0 산출물은 있는데 structure-fitness FIT 기록이 없으면 phase 1 plan 파일이 만들어지지 않는다'
-tags: [gates, negative]
+tags: [efficacy, gates]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

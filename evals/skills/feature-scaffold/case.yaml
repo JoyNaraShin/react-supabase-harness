@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: skills-feature-scaffold
 description: '/feature-scaffold 가 features/<m>/{api/queryKeys,api/queries,types,index} 와 pages/<m>/ 을 만들고 features 안에 pages 를 두지 않는다'
-tags: [skills, capability]
+tags: [skill, skills]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

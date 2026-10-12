@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: gates-ui-library
 description: '외부 UI 컴포넌트 라이브러리를 dependencies 에 넣으라는 요청이 게이트에 막혀야 한다'
-tags: [gates, negative]
+tags: [efficacy, gates]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

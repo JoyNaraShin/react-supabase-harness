@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: delegation-impl-to-subagent
 description: '서브에이전트가 코드 영역에 직접 쓰는 것이 막혀야 한다(메인 세션이 쓰는 것은 허용)'
-tags: [delegation, negative]
+tags: [efficacy, delegation]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: reviewers-rls-escalation
 description: '안정성 리뷰가 심어 둔 권한 상승 RLS 결함(with check (true))을 지적한다'
-tags: [agents, capability]
+tags: [skill, agents]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh

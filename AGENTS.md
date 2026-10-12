@@ -20,7 +20,8 @@ Claude Code 플러그인이다. 플러그인을 설치한 **다른 프로젝트*
 | `scripts/synthesize.py` | 복수 리뷰 원장 무손실 종합 검사 | 센서 · 계산형 |
 | `scripts/doctor.py` | 참조·버전·스킬 규격·eval 구조 점검 | 센서 · 계산형 |
 | `scripts/eval.sh`, `evals/` | 행동 eval — 플러그인 유무에 따른 점수 차(Δ) | 측정 |
-| `scripts/eval-report.py` | eval 결과 집계 — 모델·케이스별 Δ·pass^k, 기준 미만이면 exit 1 | 측정 |
+| `scripts/eval-report.py` | eval 결과 축별 집계(efficacy·organic·skill·overblock), `--gate` 축별 게이트, `--publish` 단일 SHA 공개본 | 측정 |
+| `evals/published/` | 공개 원자료 — 단일 커밋·clean 트리 eval 결과와 출처 meta, 보고서 | 측정 |
 | `scripts/purge-snapshots.py` | 하네스 스냅샷 ref·표식 정리(기본 dry-run, 실행은 사용자) | 유지보수 |
 | `scripts/ablate.py` | 훅별 ablation — 훅 하나를 뺀 사본으로 관련 케이스 재실행 | 측정 |
 | `scripts/bench-snapshot.py` | 스냅샷 판정 비율·훅 지연을 두 트리(기본 HEAD vs 작업 트리)로 비교 | 측정 |
@@ -56,7 +57,7 @@ HARNESS_MUTATION=1 python3 -m unittest tests.test_mutation   # 뮤테이션 (~2�
 python3 scripts/doctor.py                             # 드리프트·죽은 참조 (CI)
 claude plugin validate --strict .                     # 매니페스트
 MODEL=haiku RUNS=3 scripts/eval.sh                    # 행동 eval (사용량 소모, 수동)
-python3 scripts/eval-report.py evals/results/*.json   # Δ·pass^k 집계
+python3 scripts/eval-report.py evals/results/*.json   # 축별 집계 (--gate 게이트, --publish 공개본)
 ```
 
 eval 은 모델 비용과 플랜 사용량을 쓴다. PR 마다 돌리지 않고 GitHub Actions `eval` 워크플로(수동 실행)나 로컬에서 돌린다.

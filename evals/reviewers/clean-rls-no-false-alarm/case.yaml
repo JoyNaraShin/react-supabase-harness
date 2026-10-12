@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: reviewers-clean-rls-no-false-alarm
 description: '안정성 리뷰가 올바르게 막힌 profiles 정책을 권한 상승 Critical·High 로 잘못 부르지 않는다(회의성 보정)'
-tags: [agents, positive]
+tags: [skill, agents]
 plugins: ["../../.."]
 context:
   scaffold_script: scaffold.sh
