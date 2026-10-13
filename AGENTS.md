@@ -18,7 +18,7 @@ Claude Code 플러그인이다. 플러그인을 설치한 **다른 프로젝트*
 | `skills/` | 사용자 호출 전용 스킬 16개(`disable-model-invocation: true`) | 가이드 |
 | `docs/` | 규칙 정본. 훅·게이트 메시지가 여기 조항을 가리킨다 | 가이드 |
 | `scripts/synthesize.py` | 복수 리뷰 원장 무손실 종합 검사 | 센서 · 계산형 |
-| `scripts/doctor.py` | 참조·버전·스킬 규격·eval 구조 점검 | 센서 · 계산형 |
+| `scripts/doctor.py` | 참조·버전·스킬 규격·eval 구조·공개본(실재·버전·로컬 경로) 점검 | 센서 · 계산형 |
 | `scripts/eval.sh`, `evals/` | 행동 eval — 플러그인 유무에 따른 점수 차(Δ) | 측정 |
 | `scripts/eval-report.py` | eval 결과 축별 집계(efficacy·organic·skill·overblock), `--gate` 축별 게이트, `--publish` 단일 SHA 공개본 | 측정 |
 | `evals/published/` | 공개 원자료 — 단일 커밋·clean 트리 eval 결과와 출처 meta, 보고서 | 측정 |

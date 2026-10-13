@@ -11,6 +11,8 @@
   6. 에이전트 frontmatter — name·description 이 있다
   7. eval 케이스마다 grader 가 하나 이상 있고, 축 태그(efficacy·organic·skill·overblock)가 정확히 하나다
   8. frontmatter 값이 엄격한 YAML 에서도 문자열로 읽힌다(따옴표 없는 `[`·`{`·백틱 시작, 값 안의 `: `)
+ 10. README 의 eval 결과 머리가 가리키는 공개본(evals/published/<버전>/)이 실재하고, 원자료 meta 의 버전이
+     같으며, 공개본에 로컬 경로(홈 디렉터리·샌드박스 루트)가 남아 있지 않다
 
 실행:  python3 scripts/doctor.py      (문제 있으면 exit 1 — CI 에서 돈다)
 """
@@ -176,8 +178,34 @@ def check_evals():
             bad(case.relative_to(ROOT), f"축 태그가 정확히 하나여야 한다({'·'.join(sorted(EVAL_AXES))}) — 지금 {sorted(tags & EVAL_AXES)}")
 
 
+# 공개 수치는 공개본을 가리켜야 한다 — 머리만 바꾸고 원자료를 안 올리거나, 다른 버전의 원자료를 두는 드리프트.
+# 로컬 경로 검사는 eval-report --publish 의 스크럽이 놓친 것을 잡는 두 번째 그물이다(0.42.2 에서 자유 텍스트 누출 실측).
+LOCAL_PATH = re.compile(r"/Users/[^/\s\"'`]+/|/home/(?!cwd\b)[^/\s\"'`]+/|/private/tmp/|/var/folders/")
+
+
+def check_published():
+    m = re.search(r"^### eval 결과 — (\d+\.\d+\.\d+) 공개 측정", (ROOT / "README.md").read_text(), re.M)
+    if not m:
+        bad("README.md", "'### eval 결과 — <버전> 공개 측정' 머리가 없다 — 공개 수치가 공개본을 가리키지 않는다")
+        return
+    d = ROOT / "evals/published" / m.group(1)
+    for need in ("REPORT.md", "aggregate.json"):
+        if not (d / need).is_file():
+            bad(d.relative_to(ROOT), f"{need} 없음")
+    metas = sorted(d.glob("raw/*.meta.json"))
+    if not metas:
+        bad(d.relative_to(ROOT), "raw/*.meta.json 없음 — 출처 없는 원자료")
+    for mp in metas:
+        if json.loads(mp.read_text()).get("pluginVersion") != m.group(1):
+            bad(mp.relative_to(ROOT), f"pluginVersion ≠ README 머리 {m.group(1)}")
+    for f in sorted(ROOT.glob("evals/published/**/*")):
+        if f.is_file() and f.suffix in (".json", ".md") and LOCAL_PATH.search(f.read_text(encoding="utf-8")):
+            bad(f.relative_to(ROOT), "로컬 경로가 남아 있다 — eval-report --publish 로 다시 만든다")
+
+
 def main() -> int:
-    for fn in (check_hooks_json, check_versions, check_refs, check_skills, check_agents, check_evals, check_counts):
+    for fn in (check_hooks_json, check_versions, check_refs, check_skills, check_agents, check_evals, check_counts,
+               check_published):
         fn()
     if problems:
         print(f"doctor: 문제 {len(problems)}건")

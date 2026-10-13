@@ -283,6 +283,27 @@ def markdown(res: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+# 판정 근거·최종 답 같은 자유 텍스트에도 로컬 경로가 섞인다(모델이 경로를 인용한다). 필드를 지우는 것으로는
+# 못 막으니 공개본의 모든 문자열에서 샌드박스 루트와 홈 디렉터리를 자리표시자로 바꾼다. 순서가 중요하다 —
+# 샌드박스 안의 /home/cwd 가 홈 규칙에 먼저 먹히지 않게 샌드박스부터.
+_SCRUB = [(re.compile(r"(?:/private)?/tmp/e-[A-Za-z0-9]+/home/cwd"), "<cwd>"),
+          (re.compile(r"(?:/private)?/tmp/e-[A-Za-z0-9]+"), "<sandbox>"),
+          (re.compile(r"(?:/private)?/(?:tmp|var/folders)/claude-\d+(?:/[^\s\"'`)]*)?"), "<tmp>"),
+          (re.compile(r"/(?:Users|home)/[^/\s\"'`]+"), "~")]
+
+
+def scrub(v):
+    if isinstance(v, str):
+        for pat, rep in _SCRUB:
+            v = pat.sub(rep, v)
+        return v
+    if isinstance(v, list):
+        return [scrub(x) for x in v]
+    if isinstance(v, dict):
+        return {k: scrub(x) for k, x in v.items()}
+    return v
+
+
 def publish(paths: list, dest: str, res: dict) -> int:
     """단일 SHA·단일 버전·clean 트리에서 나온 결과만 공개본으로 묶는다. 하나라도 어긋나면 아무것도 쓰지 않는다."""
     metas = [(p, meta_of(p)) for p in paths]
@@ -309,9 +330,11 @@ def publish(paths: list, dest: str, res: dict) -> int:
             doc["suite"].pop("root", None)
             for pl in doc["suite"].get("plugins") or []:
                 pl.pop("path", None)
+        doc, m = scrub(doc), scrub(m)
         base = os.path.basename(p)[:-5]
         (d / "raw" / f"{base}.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
         (d / "raw" / f"{base}.meta.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+    res = scrub(res)
     (d / "aggregate.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
     m0 = metas[0][1]
     head = (f"# eval {m0.get('pluginVersion')} — {m0.get('sha')}\n\n"

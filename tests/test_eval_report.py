@@ -125,7 +125,8 @@ class EvalReportTest(unittest.TestCase):
 
     def test_publish_requires_single_clean_sha(self):
         meta = {"sha": "a" * 40, "dirty": False, "pluginVersion": "9.9.9", "model": "haiku", "runs": 1}
-        good = self.doc({"c": {"with": [dict(run(1), tracePath="/private/tmp/x")], "without": []}}, meta=meta)
+        leak = "saved `/private/tmp/e-Ab12/home/cwd/a.sql` · `/Users/someone/p/x.md` · /private/tmp/claude-501/s/l.md"
+        good = self.doc({"c": {"with": [dict(run(1), tracePath="/private/tmp/x", evidence=leak)], "without": []}}, meta=meta)
         other = self.doc({"c": {"with": [run(1)], "without": []}}, meta=dict(meta, sha="b" * 40))
         dirty = self.doc({"c": {"with": [run(1)], "without": []}}, meta=dict(meta, dirty=True))
         bare = self.doc({"c": {"with": [run(1)], "without": []}})
@@ -137,6 +138,8 @@ class EvalReportTest(unittest.TestCase):
         self.assertEqual(pub(good).returncode, 0)
         raw = json.loads(Path(out, "raw", os.path.basename(good)).read_text())
         self.assertNotIn("tracePath", raw["cases"][0]["arms"]["with"][0])
+        # 자유 텍스트 속 로컬 경로도 자리표시자로 — 사용자명·샌드박스 루트가 공개본에 남지 않는다
+        self.assertEqual(raw["cases"][0]["arms"]["with"][0]["evidence"], "saved `<cwd>/a.sql` · `~/p/x.md` · <tmp>")
         self.assertTrue(Path(out, "REPORT.md").read_text().startswith("# eval 9.9.9"))
 
 
