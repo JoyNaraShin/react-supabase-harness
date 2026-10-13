@@ -56,7 +56,7 @@ def ctx_from(data: dict) -> dict:
         "input": ti,
         "path": (ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/"),
         "body": body,
-        "command": ti.get("command") or "",
+        "command": shellparse.nul_cut(str(ti.get("command") or "")),
         "replace_all": bool(ti.get("replace_all")),
         "edits": edits,
         "root": root,

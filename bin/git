@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""harness-git-wrapper — 실행 시점 git 가드. bash 가 해석을 끝낸 뒤 git 이 **실제로 받은 인자**로 판정한다.
+
+정적 가드(hooks/block-destructive-git.py)는 명령 글자만 보고 bash 의 해석을 추측한다. 추측이 어긋날 때마다 구멍이
+났다(0.43.0 의 `git branch -Df` 까지). 이 래퍼는 추측하지 않는다 — 변수·따옴표·`eval`·`$(…)`·배열·함수·`xargs` 는
+이미 끝난 상태이고, git 별칭은 설정을 직접 읽어 git 과 같은 규칙(내장 명령 우선·따옴표 분리)으로 펼친다.
+셸 별칭(`!…`)은 막는다 — git 이 자기 exec-path 를 PATH 앞에 두므로 그 안의 git 은 이 래퍼를 지나지 않는다.
+판정 규칙은 정적 가드와 같은 hooks/gitpolicy.py 다.
+
+SessionStart 훅(hooks/install-rm-guard.py)이 이 디렉터리를 PATH 앞에 둔다. `/usr/bin/git` 처럼 경로를 직접 쓴
+호출은 이 래퍼를 지나지 않는다 — 그건 정적 가드의 몫이다.
+"""
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+ROOT = os.path.dirname(HERE)
+MARK = b"harness-git-wrapper"
+# 판정 모듈을 못 불러올 때 막을 하위 명령 — 이것이 인자에 없으면 판정 없이도 지나간다(fail-closed 범위를 좁힌다)
+RISKY = {"commit", "push", "reset", "clean", "branch", "checkout", "switch", "restore", "stash", "filter-branch",
+         "filter-repo", "reflog", "update-ref", "worktree", "revert", "cherry-pick"}
+
+
+def _is_wrapper(p: str) -> bool:
+    """다른 버전의 이 래퍼인가 — 그것을 진짜 git 으로 고르면 두 래퍼가 서로를 execv 한다(0.42.1 rm 래퍼 실측)."""
+    try:
+        with open(p, "rb") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and MARK in head
+
+
+def real_git() -> str:
+    """이 래퍼가 아닌 git. 테스트는 HARNESS_REAL_GIT 으로 기록기를 끼운다 — 판정은 그 전에 끝나므로 우회 수단이 아니다."""
+    for k in ("HARNESS_REAL_GIT", "HARNESS_GIT_NEXT"):   # NEXT = 앞선 래퍼가 판정 뒤 찾아 둔 진짜 git
+        if os.environ.get(k):
+            return os.environ[k]
+    me = os.path.realpath(__file__)
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or os.path.realpath(d) == HERE:
+            continue
+        p = os.path.join(d, "git")
+        if os.path.isfile(p) and os.access(p, os.X_OK) and os.path.realpath(p) != me and not _is_wrapper(p):
+            return p
+    return "/usr/bin/git"
+
+
+def config_lookup(git: str, glob_opts: list):
+    """저장소·전역 설정값(`git config --get`) — 별칭(`alias.p 'push --force'`)과 동작을 바꾸는 설정. 정적 가드는 못 본다."""
+    import subprocess
+
+    def look(key: str, regexp: bool = False):
+        try:
+            r = subprocess.run([git] + glob_opts + ["config", "--get-regexp" if regexp else "--get", key],
+                               capture_output=True, text=True, timeout=3)
+        except Exception:
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout.strip()
+    return look
+
+
+def alias_lookup(git: str, glob_opts: list):
+    conf = config_lookup(git, glob_opts)
+
+    def look(name: str):
+        if name.startswith("-"):                 # 내장 명령은 gitpolicy.expand 가 조회 전에 거른다
+            return None
+        return conf("alias." + name) or None
+    return look
+
+
+def decide(argv: list, git: str):
+    """차단 사유 또는 None."""
+    sys.path.insert(0, os.path.join(ROOT, "hooks"))
+    import gitpolicy
+    glob_opts = gitpolicy.split(argv)[0]
+    look = alias_lookup(git, list(glob_opts))
+    reason = gitpolicy.check(argv, look, config_lookup(git, list(glob_opts)))
+    if reason and gitpolicy.is_commit(argv, look) and os.environ.get("CLAUDE_COMMIT_APPROVED") == "1":
+        # `/commit` 승인 경로 — 그래도 훅이 기록한 verify FAIL 위에서는 막는다
+        root = os.environ.get("HARNESS_PROJECT_DIR") or os.getcwd()
+        reason = gitpolicy.verify_failed(root, git)
+    return reason
+
+
+def main(argv: list) -> int:
+    git = real_git()
+    try:
+        reason = decide(argv, git)
+    except Exception as e:                           # 판정을 못 하면 위험할 수 있는 하위 명령은 막는다
+        reason = f"판정 실패({e})" if RISKY & {a.lower() for a in argv} else None
+    if reason:
+        sys.stderr.write(
+            f"[react-supabase-harness] git 차단 — {reason.replace(' 사용자 승인 필요.', '')}\n"
+            "왜: 실행 시점 가드는 bash 가 해석을 끝낸 실제 인자를 본다(변수·별칭·eval 로 바꿔 써도 같다).\n"
+            "다음 행동: 비파괴 대안을 쓰거나(강제 push 는 `--force-with-lease`, 폐기는 `git stash -u`), 이 조작이 꼭 "
+            f"필요하면 이유를 사용자에게 설명하고 사용자가 직접 `! {git} …` 로 실행하게 하라.\n")
+        return 1
+    os.environ["HARNESS_GIT_NEXT"] = git             # 이 뒤의 래퍼(셸 별칭 속 git 등)는 PATH 를 다시 뒤지지 않는다
+    os.execv(git, [git] + argv)
+    return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

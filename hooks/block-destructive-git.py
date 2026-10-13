@@ -41,6 +41,7 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gitpolicy  # noqa: E402
 import rmpolicy  # noqa: E402
 import scope  # noqa: E402
 import shellparse  # noqa: E402
@@ -321,63 +322,8 @@ def check(tokens: list):
         return None
 
     if head == "git":
-        gi = git_sub_index(tokens)
-        if gi < 0:
-            return None
-        sub, rest = tokens[gi], tokens[gi + 1:]
-        if sub == "commit":
-            return ("git commit 직접 실행 금지. `/commit` 스킬로 커밋 단위를 제안하고 "
-                    "사용자 승인을 받은 뒤 그 스킬이 실행한다.")
-        if sub == "push":
-            # pre-push 훅(scripts/install-git-hooks.sh)이 결과로 막는 강제 갱신을 훅 건너뛰기로 피하지 못하게
-            if "--no-verify" in rest or any("hookspath" in t.lower() for t in tokens[1:gi]):
-                return "git push --no-verify/core.hooksPath 변경(pre-push 훅 건너뛰기) 금지. 사용자 승인 필요."
-            for a in rest:
-                if a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a):
-                    return "git push --force/-f 금지(강제 push). 사용자 승인 필요. (`--force-with-lease` 허용)"
-                if a in ("--delete", "--mirror", "--prune") or (
-                        a.startswith("-") and not a.startswith("--") and "d" in a):
-                    return f"git push {a}(원격 ref 삭제·덮어쓰기) 금지. 사용자 승인 필요."
-                if a.startswith("+"):
-                    return "git push +refspec(강제) 금지. 사용자 승인 필요."
-                if len(a) > 1 and a.startswith(":"):
-                    return "git push :branch(원격 브랜치 삭제) 금지. 사용자 승인 필요."
-            return None
-        if sub == "reset" and "--hard" in rest:
-            return "git reset --hard 금지(파괴적). 사용자 승인 필요."
-        if sub == "checkout":
-            creates = any(a in ("-b", "-B", "--orphan") for a in rest)
-            positional = [a for a in rest if not a.startswith("-")]
-            if not creates and ("--" in rest or rest[:1] == ["HEAD"] or "." in rest
-                                or "--force" in rest or has_short_flag(rest, "f")
-                                or len(positional) >= 2):  # `checkout <tree-ish> <path>`
-                return "git checkout <ref> <path>/./--/-f(작업 폐기) 금지. 사용자 승인 필요."
-        if sub == "switch" and ("--discard-changes" in rest or "--force" in rest
-                                or has_short_flag(rest, "f")):
-            return "git switch --discard-changes/-f(작업 폐기) 금지. 사용자 승인 필요."
-        if sub == "stash" and rest[:1] in (["clear"], ["drop"]):
-            return f"git stash {rest[0]}(스태시 영구 삭제) 금지. 사용자 승인 필요."
-        if sub == "restore" and not ("--staged" in rest and "--worktree" not in rest
-                                     and not has_short_flag(rest, "W")):
-            return "git restore(작업 트리 폐기) 금지. 사용자 승인 필요. (`--staged` 언스테이지는 허용)"
-        if sub in ("filter-branch", "filter-repo"):
-            return f"git {sub}(이력 재작성) 금지. 사용자 승인 필요."
-        if sub == "reflog" and rest[:1] in (["expire"], ["delete"]):
-            return "git reflog expire/delete(복구 경로 삭제) 금지. 사용자 승인 필요."
-        if sub == "update-ref" and ("-d" in rest or "--delete" in rest):
-            return "git update-ref -d(ref 삭제) 금지. 사용자 승인 필요."
-        if sub == "worktree" and rest[:1] == ["remove"] and ("--force" in rest or has_short_flag(rest, "f")):
-            return "git worktree remove --force 금지. 사용자 승인 필요."
-        if sub in ("revert", "cherry-pick") and "--no-commit" not in rest and "-n" not in rest:
-            return f"git {sub} 는 커밋을 만든다 — `/commit` 승인 절차를 거친다. (`--no-commit` 은 허용)"
-        if sub == "clean" and ("--force" in rest or has_short_flag(rest, "f")):
-            return "git clean -f/--force(untracked 파괴) 금지. 사용자 승인 필요."
-        if sub == "branch":
-            if "-D" in rest:
-                return "git branch -D(강제 삭제) 금지. 사용자 승인 필요."
-            if ("--delete" in rest or "-d" in rest) and ("--force" in rest or has_short_flag(rest, "f")):
-                return "git branch --delete --force 금지. 사용자 승인 필요."
-        return None
+        # 규칙은 실행 시점 래퍼(bin/git)와 같은 hooks/gitpolicy.py 한 곳에 있다. 여기서는 글자로 추측한 토큰을 넘긴다
+        return gitpolicy.check(tokens[1:])
 
     if head == "rm":
         flags = [a for a in tokens[1:] if a.startswith("-")]
@@ -543,34 +489,8 @@ def scan(command: str, keep=None):
 
 
 def verify_failed():
-    """훅이 기록한 마지막 verifier 판정(subagent-audit → .claude/state/verdicts.jsonl)이 지금 HEAD 위의 FAIL 이면
-    승인 커밋도 막는다. 기록은 에이전트가 쓸 수 없는 파일이라 대화 속 "검증 통과" 주장과 다르다.
-    기록이 없거나 그 뒤 커밋이 있었으면(HEAD 가 다르면) 판단하지 않는다."""
-    import subprocess
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or "."
-    try:
-        lines = open(os.path.join(root, ".claude", "state", "verdicts.jsonl"), encoding="utf-8").read().splitlines()
-    except Exception:
-        return None
-    last = None
-    for ln in lines:
-        try:
-            r = json.loads(ln)
-        except Exception:
-            continue
-        if r.get("agent_type") == "verifier":
-            last = r
-    if not last or last.get("verdict") != "FAIL":
-        return None
-    try:
-        head = subprocess.run(["git", "-C", root, "rev-parse", "-q", "--verify", "HEAD"], capture_output=True,
-                              text=True, timeout=3).stdout.strip()
-    except Exception:
-        return None
-    if head and last.get("head") == head:
-        return ("verify FAIL 기록 위의 커밋 — 마지막 verifier 판정이 FAIL 이고 그 뒤 PASS 가 없다"
-                "(.claude/state/verdicts.jsonl, 훅 기록). 사용자 승인 필요.")
-    return None
+    """훅이 기록한 마지막 verifier 판정이 지금 HEAD 위의 FAIL 이면 승인 커밋도 막는다(규칙은 gitpolicy.verify_failed)."""
+    return gitpolicy.verify_failed(os.environ.get("CLAUDE_PROJECT_DIR") or ".")
 
 
 def main() -> None:

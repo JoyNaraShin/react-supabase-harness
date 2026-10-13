@@ -13,6 +13,7 @@ v0.35.1 은 변수 재대입 10가지를 놓쳐 `rm -rf /` 급 삭제를 통과�
 """
 import itertools
 import re
+import shlex
 import json
 import os
 import shutil
@@ -366,6 +367,290 @@ class ShellDifferentialTest(unittest.TestCase):
             if '"deny"' not in r.stdout:
                 misses.append(cmd)
         self.assertEqual(misses[:5], [], f"보호 파일을 실제로 쓰는데 통과한 명령 {len(misses)}개")
+
+
+# ── git 차분 ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# rm 만 실제 bash 와 대조하던 동안 git 파괴 명령은 대조된 적이 없었다. 0.42.4 까지 `git branch -Df`·`-fd` 가 모든 감싸기
+# (런처·bash -c·eval·heredoc)에서 통과했다 — 정적 가드가 `-D`·`-d` 를 토큰 일치로만 봤다. 범위는 README 가 "검사한다"고
+# 한 꼴과 평범한 표기다. 작정하고 비튼 표기·git 별칭은 문서상 범위 밖(「보안 경계가 아닌 것」)이라 넣지 않는다.
+GIT_RECORDER = """#!/bin/sh
+for a in "$@"; do printf '%s\\037' "$a" >> "$__OUT"; done
+printf '\\036' >> "$__OUT"
+"""
+GIT_SUBS = ["push --force origin main", "push -f", "push origin +main", "push --delete origin x", "push origin :x",
+            "push --mirror", "push --no-verify", "push -fu origin main", "push origin main --force",
+            "reset --hard HEAD~1", "reset HEAD~1 --hard", "clean -fd", "clean -xfd", "clean --force",
+            "branch -D x", "branch --delete --force x", "branch -df x", "branch -Df x", "branch -fd x",
+            "branch -d -f x", "commit -m x", "commit -qam x"]
+GIT_HEADS = ["git", "git -C .", "git -c core.x=1", "git --no-pager", "command git", "env git", "nohup git",
+             "nice git", "env X=1 git", "X=1 git", "time git"]
+GIT_WRAPS = ["{b}", "true && {b}", "true; {b}", "true || {b}", "{b} &", "if true; then {b}; fi",
+             "for i in 1; do {b}; done", "( {b} )", "{{ {b}; }}", "true\n{b}", "bash -c '{b}'", "sh -c '{b}'",
+             "eval '{b}'", "eval \"{b}\"", "bash <<'E'\n{b}\nE", "sh <<E\n{b}\nE", "{b} 2>&1 | cat", "! {b}",
+             "{b} # note", "cd . && {b}"]
+GIT_ARG_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+_GIT_STUB = []
+
+
+def _git_stub() -> str:
+    """PATH 의 유일한 디렉터리 — git 은 기록기, 감싸기에 필요한 도구만 링크한다(진짜 git 에 닿지 않는다)."""
+    if not _GIT_STUB:
+        d = tempfile.mkdtemp(prefix="harness-gitstub-")
+        with open(os.path.join(d, "git"), "w") as f:
+            f.write(GIT_RECORDER)
+        os.chmod(os.path.join(d, "git"), 0o755)
+        for name in ("env", "sh", "bash", "nohup", "nice", "cat", "true", "python3", "xargs", "echo"):
+            src = shutil.which(name, path="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin")
+            if src:
+                os.symlink(src, os.path.join(d, name))
+        _GIT_STUB.append(d)
+    return _GIT_STUB[0]
+
+
+def real_git_calls(cmd: str, cwd: str, path: str = "") -> list:
+    """git 기록기가 받은 인자 목록. path 를 주면 그 PATH 로 돈다(래퍼 디렉터리를 앞에 둘 때)."""
+    out = os.path.join(cwd, "git-out.bin")
+    if os.path.exists(out):
+        os.unlink(out)
+    subprocess.run([BASH, "-c", cmd + "\nwait"], cwd=cwd, env={"PATH": path or _git_stub(), "HOME": cwd, "__OUT": out, "G": "git"},
+                   capture_output=True, timeout=10)
+    if not os.path.exists(out):
+        return []
+    with open(out, encoding="utf-8", errors="surrogateescape") as f:
+        raw = f.read()
+    return [c.split("\x1f")[:-1] for c in raw.split("\x1e") if c]
+
+
+# 하위 명령별 긴 옵션 — git 은 모호하지 않은 접두어를 그 옵션으로 받는다(`--har` = `--hard`)
+GIT_LONG = {
+    "push": "force force-with-lease force-if-includes delete dry-run mirror no-verify verify porcelain progress prune "
+            "push-option set-upstream tags all atomic quiet verbose repo receive-pack thin no-thin follow-tags signed "
+            "recurse-submodules ipv4 ipv6",
+    "reset": "hard soft mixed merge keep quiet patch no-refresh refresh pathspec-from-file pathspec-file-nul "
+             "recurse-submodules intent-to-add",
+    "clean": "force dry-run quiet exclude interactive",
+    "branch": "delete force move copy list all remotes verbose quiet track no-track set-upstream-to unset-upstream "
+              "contains no-contains merged no-merged sort format column points-at color abbrev edit-description "
+              "create-reflog show-current ignore-case omit-empty recurse-submodules",
+}
+GIT_ORACLE_BUILTIN = {"push", "reset", "clean", "branch", "commit", "status", "log", "fetch", "diff", "show"}
+
+
+def _long(sub: str, flag: str) -> str:
+    name, opts = flag[2:].split("=")[0], GIT_LONG.get(sub, "").split()
+    if name in opts:
+        return "--" + name
+    hits = [o for o in opts if o.startswith(name)] if name else []
+    return "--" + hits[0] if len(hits) == 1 else flag
+
+
+def git_destructive(argv: list):
+    """가드와 독립된 판정 — git 이 실제로 받은 인자로 본다. `-c` 별칭은 git 의 규칙대로 펼친다
+    (내장 명령이 별칭보다 앞선다 · 본문의 따옴표는 벗긴다 · 셸 별칭 속 git 은 진짜 git 이므로 그 자체로 위험)."""
+    for _ in range(10):
+        i, aliases = 0, {}
+        while i < len(argv) and argv[i].startswith("-"):
+            if argv[i] == "-c" and i + 1 < len(argv) and argv[i + 1].lower().startswith("alias."):
+                k, _, v = argv[i + 1].partition("=")
+                aliases[k[6:].lower()] = v
+            i += 2 if argv[i] in GIT_ARG_OPTS else 1
+        if i >= len(argv):
+            return None
+        sub = argv[i]
+        if sub.lower() in GIT_ORACLE_BUILTIN or sub.lower() not in aliases:
+            break
+        body = aliases[sub.lower()].strip()
+        if body.startswith("!"):
+            return "shell alias"
+        argv = argv[:i] + shlex.split(body) + argv[i + 1:]
+    sub, rest = argv[i].lower(), argv[i + 1:]
+    flags = set()
+    for r in rest:
+        if r == "--":
+            break
+        if r.startswith("--"):
+            flags.add(_long(sub, r))
+        elif r.startswith("-") and len(r) > 1:
+            flags.update("-" + ch for ch in r[1:])
+    pos = [r for r in rest if not r.startswith("-")]
+    if sub == "push" and (flags & {"-f", "--force", "--delete", "-d", "--mirror", "--no-verify"}
+                          or any(p.startswith(("+", ":")) for p in pos)):
+        return "push"
+    if sub == "reset" and "--hard" in flags:
+        return "reset --hard"
+    if sub == "clean" and flags & {"-f", "--force"}:
+        return "clean -f"
+    if sub == "branch" and ("-D" in flags or (flags & {"-d", "--delete"} and flags & {"-f", "--force"})):
+        return "branch -D"
+    if sub == "commit":
+        return "commit"
+    return None
+
+
+# 래퍼를 지나지 않는 꼴 — 경로로 부르는 git, PATH 조작, 기본 PATH 로 찾기(`command -p`), 환경 비우기
+GIT_UNSAFE_RUN = re.compile(r"[\w.${}~-]*/git\b|\bPATH\b|\benv\b[^;&|\n]*\s-(?:\w*i\b|u\b)|\bcommand(?:\s+-\w+)*\s+-\w*p")
+
+
+def gen_git_spelled(rnd) -> str:
+    """파괴 git 명령을 bash 표기로 비튼다 — 따옴표 조각·변수·$(…)·eval·배열·함수·xargs·heredoc·이어쓰기·-c 별칭."""
+    sub = rnd.choice([["push", "--force", "origin", "main"], ["push", "-f"], ["push", "origin", "+main"],
+                      ["push", "--delete", "origin", "x"], ["reset", "--hard", "HEAD~1"], ["clean", "-fd"],
+                      ["branch", "-D", "x"], ["commit", "-m", "x"], ["push", "--mirror"], ["push", "origin", ":x"],
+                      ["reset", "--har"], ["clean", "--forc"], ["push", "--delet", "origin", "x"],
+                      ["branch", "--delet", "--forc", "x"]])
+    word = lambda w: rnd.choice([w, "'" + w + "'", '"' + w + '"', w[:1] + "''" + w[1:], w[:1] + "\\" + w[1:],
+                                 "$'" + w + "'", "${E:-" + w + "}", "$(echo " + w + ")", "`echo " + w + "`"])
+    toks = [word(t) for t in sub]
+    head = rnd.choice(["git", "\\git", "'git'", "g\\it", "${G:-git}", "$G", "command git", "env git", "nohup git",
+                       "nice git", "git -C .", "git -c core.x=1", "git --no-pager",
+                       "git -c alias.zz='" + " ".join(sub) + "' zz",
+                       "git -c alias.zz='" + sub[0] + ' "' + sub[1] + '" ' + " ".join(sub[2:]) + "' zz",
+                       "git -c 'alias.zz=!git " + " ".join(sub) + "' zz",
+                       "git -c alias." + sub[0] + "=status"])
+    if head.endswith(" zz"):
+        toks = []
+    style = rnd.randrange(12)
+    body = head + " " + " ".join(toks)
+    if style == 0:
+        body = "S='" + " ".join(sub) + "'; git $S"
+    elif style == 1:
+        body = "A=(" + " ".join(sub) + "); git \"${A[@]}\""
+    elif style == 2:
+        body = "f(){ git \"$@\"; }; f " + " ".join(sub)
+    elif style == 3:
+        body = "eval \"" + body.replace('"', '\\"') + "\""
+    elif style == 4:
+        body = "bash -c '" + body.replace("'", "'\\''") + "'"
+    elif style == 5:
+        body = "echo " + " ".join(sub[1:]) + " | xargs git " + sub[0]
+    elif style == 6:
+        body = "sh <<'E'\n" + body + "\nE"
+    elif style == 7 and toks:
+        body = head + " " + " ".join(toks[:-1]) + " \\\n" + toks[-1]
+    elif style == 8:
+        body = "F=" + rnd.choice(["--force", "-f", "--hard", "-D", "-fd"]) + "; git " + sub[0] + " $F"
+    return rnd.choice(["", "G=git; ", "E=" + sub[0] + "; ", "true && ", "cd . && "]) + body
+
+
+@unittest.skipUnless(BASH, "bash 가 없으면 대조할 수 없다")
+class GitDifferentialTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="harness-gitdiff-")
+        cls.bdg = load("block-destructive-git.py")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _misses(self, cmds):
+        misses, checked = [], 0
+        for cmd in cmds:
+            if self.bdg.scan(cmd):
+                continue
+            checked += 1
+            for argv in real_git_calls(cmd, self.tmp):
+                why = git_destructive(argv)
+                if why:
+                    misses.append((cmd, why))
+                    break
+        return misses, checked
+
+    def test_oracle_sees_what_git_receives(self):
+        # 기록기·판정이 살아 있는지 — 가드를 거치지 않고 직접
+        self.assertEqual(real_git_calls("bash -c 'git branch -df x'", self.tmp), [["branch", "-df", "x"]])
+        self.assertEqual(git_destructive(["branch", "-df", "x"]), "branch -D")
+        self.assertIsNone(git_destructive(["branch", "-d", "x"]))
+        self.assertIsNone(git_destructive(["push", "--force-with-lease", "origin", "main"]))
+
+    def test_every_documented_form_of_a_destructive_git_command_is_blocked(self):
+        # 감싸기 전부 × 머리 git, 머리 전부 × 감싸기 없음 — 하위 명령 전부
+        cmds = [w.format(b="git " + s) for s in GIT_SUBS for w in GIT_WRAPS] + \
+               [h + " " + s for s in GIT_SUBS for h in GIT_HEADS]
+        misses, checked = self._misses(cmds)
+        self.maxDiff = None
+        self.assertEqual(misses[:8], [], f"가드가 통과시켰는데 git 이 실제로 파괴 인자를 받은 명령 {len(misses)}개 / {len(cmds)}")
+
+    def test_seeded_combinations_of_heads_and_wraps(self):
+        # 시드마다 다른 (머리 × 감싸기 × 하위 명령) 조합 — CI 는 run 마다 시드를 바꾼다
+        rnd, n = fuzz_rng()
+        cmds = [rnd.choice(GIT_WRAPS).format(b=rnd.choice(GIT_HEADS) + " " + rnd.choice(GIT_SUBS))
+                for _ in range(max(50, n // 10))]
+        misses, _ = self._misses(cmds)
+        self.assertEqual(misses[:8], [], f"조합 중 놓친 것 {len(misses)}개")
+
+    def test_runtime_guard_blocks_destructive_git_in_any_spelling(self):
+        # 실행 시점 가드(bin/git, 0.43.0)는 정적 가드가 추측하던 표기(변수·$(…)·eval·배열·함수·xargs·heredoc·-c 별칭)를
+        # bash 가 이미 푼 뒤에 본다. 정적 가드 없이 래퍼만으로 — 같은 생성기에서 래퍼가 없으면 300개 중 272개가 파괴 인자를 git 에 넘겼다.
+        rnd, n = fuzz_rng()
+        stub = _git_stub()
+        misses, ran = [], 0
+        for _ in range(max(100, n // 10)):
+            cmd = gen_git_spelled(rnd)
+            if GIT_UNSAFE_RUN.search(re.sub(r"[\\'\"]", "", cmd)):
+                continue                                   # 래퍼를 지나지 않는 꼴(절대 경로·PATH 조작) — 정적 가드 몫
+            ran += 1
+            for argv in real_git_calls(cmd, self.tmp, path=WRAPPER_DIR + ":" + stub):
+                why = git_destructive(argv)
+                if why:
+                    misses.append((cmd, why))
+                    break
+        self.assertGreater(ran, 50)
+        self.assertEqual(misses[:8], [], f"래퍼를 지나 진짜 git 이 파괴 인자를 받은 명령 {len(misses)}개")
+
+    def test_routine_git_still_passes(self):
+        for cmd in ["git push origin main", "git push --force-with-lease origin main", "git push -u origin feat",
+                    "git reset --soft HEAD~1", "git reset HEAD file", "git clean -n", "git branch -d merged",
+                    "git branch -dv merged", "git status", "bash -c 'git log --oneline -3'"]:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(self.bdg.scan(cmd))
+
+
+# ── 예외 퍼즈 ────────────────────────────────────────────────────────────────────────────────────────────────────
+# 훅이 예외로 죽으면 종료 코드 1 — Claude Code 는 비차단 오류로 보고 도구를 그대로 실행한다(fail-open). 그래서 어떤
+# 입력에서도 파서·술어가 예외를 던지지 않아야 한다. 0.42.4 까지 명령 속 NUL 이 경로 함수를 ValueError 로 죽여
+# gate-engine 술어가 빠졌다.
+EXC_ATOMS = ["$((", "))", "<(", ">(", "${!", "${A[", "]}", '$"', "\r\n", " ", "\t", "|&", "&>>", "1<>", ";;",
+             "case x in", "esac", "[[", "]]", "((", "<<<", "<<-E\n", "\nE", "`", "$(", ")", "\0", "$S", "/", "src",
+             " ", "'", '"', "\\", "{", "}", ",", "..", "#", "\n", ";", "&", "|", "~", "*", "$"]
+EXC_HEADS = ["git push --force ", "git -C ", "git branch -D ", "cat > src/a.ts <<'E'\nx\nE\n", "tee -a src/",
+             "cp x src/", "sed -i s/a/b/ src/", "dd of=src/", "echo x >| src/", "cd \"$X\" && ", "popd; ", "env -S ",
+             "sudo -u x ", "xargs ", "nice -n 1 ", "exec ", "command -p ", "bash -c '", "eval \"", "f(){ :; }; f "]
+
+
+class ExceptionFuzzTest(unittest.TestCase):
+    def test_parsers_and_predicates_never_raise(self):
+        sp = load("shellparse.py")
+        ge = load("gate-engine.py")
+        proj = tempfile.mkdtemp(prefix="harness-exc-")
+        self.addCleanup(shutil.rmtree, proj, True)
+        os.makedirs(os.path.join(proj, "src"))
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_ROOT": str(ROOT), "CLAUDE_PROJECT_DIR": proj}):
+            rules = ge.load_rules()
+        self.assertTrue(rules, "룰을 못 읽으면 술어를 하나도 돌리지 않는다")
+        rnd, n = fuzz_rng()
+        crashes = []
+        for i in range(n):
+            k = rnd.random()
+            cmd = (gen_chars(rnd, EXC_HEADS) if k < 0.35 else gen_grammar(rnd) if k < 0.55 else
+                   rnd.choice(["", "S=/; ", "X=$(pwd); "]) + rnd.choice(EXC_HEADS)
+                   + "".join(rnd.choice(EXC_ATOMS) for _ in range(rnd.randint(1, 12))))
+            try:
+                for seg, _ in sp.segments(cmd, proj) + sp.segments(cmd, proj, shell_only=True):
+                    toks = sp.tokens(seg)
+                    sp.strip_launchers(toks), sp.git_sub(toks), sp.write_targets(seg, cmd), sp.segment_read_only(seg)
+                sp.call_level(cmd)
+                ctx = ge.ctx_from({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": proj})
+                ge._bash_writes(ctx)
+                for r in rules:
+                    for cond in r.get("when", []):
+                        keys = [x for x in cond if x != "not"]
+                        if len(keys) == 1 and keys[0] in ge.PREDICATES:
+                            ge.PREDICATES[keys[0]](ctx, cond[keys[0]])
+            except Exception as e:                      # noqa: BLE001 — 예외 자체가 결함이다
+                crashes.append((cmd, f"{type(e).__name__}: {e}"))
+        self.assertEqual(crashes[:5], [], f"예외를 던진 입력 {len(crashes)}개 — 훅 안에서는 fail-open 이 된다")
 
 
 if __name__ == "__main__":

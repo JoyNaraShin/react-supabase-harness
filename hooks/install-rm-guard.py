@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart: 실행 시점 rm 가드(bin/rm)를 이 세션의 Bash PATH 앞에 둔다.
+"""SessionStart: 실행 시점 가드(bin/rm·bin/git)를 이 세션의 Bash PATH 앞에 둔다.
 
 Claude Code 는 SessionStart 훅이 CLAUDE_ENV_FILE 에 쓴 내용을 이후 모든 Bash 명령 앞에 실행한다(공식 hooks 문서).
 그래서 `rm`·`\\rm`·`command rm`·`xargs rm`·`find -exec rm` 이 모두 래퍼를 지난다. `/bin/rm` 처럼 경로를 직접

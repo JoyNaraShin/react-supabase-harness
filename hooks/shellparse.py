@@ -42,7 +42,7 @@ LEADING_POSITIONAL = {"timeout": {"-s", "--signal", "-k", "--kill-after"}}
 SHELL_KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "{", "}", "!", "done", "fi", "esac"}
 ASSIGN_WORD = re.compile(r"^[A-Za-z_]\w*=")
 # git 의 값 받는 전역 옵션(git.c 기준) — `git -C dir status` 의 하위 명령은 dir 이 아니다.
-GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix"}
+GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
 DEST_LAST = {"cp", "install", "rsync", "ln"}
 ALL_ARGS = {"touch", "truncate", "tee", "rm", "unlink", "mkdir", "sponge", "mv", "rmdir", "shred"}
 IN_PLACE = {"sed", "perl", "awk", "gawk"}
@@ -602,9 +602,16 @@ def bound_names(cmd: str) -> frozenset:
     return frozenset(out)
 
 
+def nul_cut(cmd: str) -> str:
+    """명령은 C 문자열로 셸에 넘어간다 — NUL 뒤는 bash 에 닿지 않는다. 판정도 거기서 끊는다. 남겨 두면 경로 함수가
+    ValueError(embedded null byte)로 죽어 술어가 통째로 빠졌다(fail-open, 0.42.4 까지 — 예외 퍼즈)."""
+    return cmd.split("\0", 1)[0]
+
+
 def canonical(cmd: str, keep=frozenset()) -> str:
-    """판정용 사본 — bash 가 토큰을 나누기 전에 하는 변환을 먼저 한다: 이어쓰기 제거, `$'…'` 풀기, 복잡한 `${…}` 접기."""
-    return collapse_params(decode_ansi_quotes(join_continuations(cmd)), keep)
+    """판정용 사본 — bash 가 토큰을 나누기 전에 하는 변환을 먼저 한다: NUL 에서 끊기, 이어쓰기 제거, `$'…'` 풀기,
+    복잡한 `${…}` 접기."""
+    return collapse_params(decode_ansi_quotes(join_continuations(nul_cut(cmd))), keep)
 
 
 # 위치를 모른다(`cd "$X"`·`cd -`·`popd`). None 이 아니라 문자열이다 — os.path.* 에 들어가도 TypeError 로 훅이 죽지 않는다.

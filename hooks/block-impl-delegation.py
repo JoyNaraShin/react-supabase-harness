@@ -167,7 +167,7 @@ def main() -> None:
         if hit:
             deny(message(agent, hit))
     elif tool == "Bash":
-        cmd = str(ti.get("command") or "")
+        cmd = shellparse.nul_cut(str(ti.get("command") or ""))
         # 셸 전용 — python heredoc 본문의 문자열 "rm -rf src" 는 셸 명령이 아니다
         start = str(data.get("cwd") or root)
         for seg, here in shellparse.segments(cmd, start, shell_only=True):

@@ -358,6 +358,32 @@ class DestructiveGitTest(unittest.TestCase):
             with self.subTest(c=c):
                 self.assertTrue(denied(self.check(c)))
 
+    def test_branch_force_delete_in_bundled_short_flags(self):
+        # 0.42.4 까지 `-D`·`-d` 토큰 일치만 봐서 묶음이 통과했다(git 차분 퍼즈 — 런처·bash -c·heredoc 모든 감싸기에서)
+        for c in ["git branch -Df x", "git branch -fd x", "git branch -df x", "git branch -dr --force x",
+                  "bash -c 'git branch -df x'", "git -C . branch -fd x"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        for c in ["git branch -d x", "git branch -dv x", "git branch -vv", "git branch -m old new", "git branch -a"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+
+    def test_git_alias_cannot_shadow_a_builtin(self):
+        # git 은 내장 명령과 같은 이름의 별칭을 무시한다 — 0.43.0 초안은 펼쳐서 진짜 push·reset 을 통과시켰다(push 전 보안 리뷰)
+        for c in ["git -c alias.push=status push --force origin main", "git -c alias.reset=status reset --hard",
+                  "git -c alias.branch=log branch -D x", "git -c 'alias.x=!git push --force' x",
+                  "git -c 'alias.p=push \"--force\"' p origin main", "git reset --har", "git clean --forc",
+                  "git -c remote.origin.push=+HEAD:main push", "git -c clean.requireForce=false clean -d",
+                  "git config remote.origin.push +HEAD:main", "git config clean.requireForce false",
+                  "git config alias.x '!git push -f'", "git config --global core.hooksPath /dev/null"]:
+            with self.subTest(c=c):
+                self.assertTrue(denied(self.check(c)))
+        for c in ["git -c alias.st=status st", "git push --force-with-lease origin main", "git restore --stag f",
+                  "git config user.name x", "git config alias.st status", "git config --get remote.origin.url",
+                  "git config --get remote.origin.push", "git config get clean.requireForce"]:
+            with self.subTest(c=c):
+                self.assertIsNone(self.check(c))
+
     def test_rm_boundary(self):
         # 깊은 경로 정리는 일상이다 / 변수만 있는 경로·-f 없는 -r (`.git` 은 RmPolicyTest — 세션 프로젝트 기준)
         for c in ["rm -rf /tmp/build-x", "rm -rf /Users/me/proj/dist", "rm -rf ~/.cache/tool/x"]:
@@ -1398,6 +1424,11 @@ class PlanFirstShellTest(_RepoCase):
                 self.assertTrue(denied(out))
                 self.assertIn("다음 행동", reason(out))
 
+    def test_nul_byte_does_not_crash_the_gate_open(self):
+        # NUL 뒤는 bash 에 닿지 않는데, 판정 쪽 경로 함수는 ValueError 로 죽어 술어가 빠졌다(0.42.4 까지 fail-open — 예외 퍼즈)
+        out = self.gate("Bash", {"command": f"cat > src/new.ts <<'EOF'\n{self.BIG}\nEOF\n&>>\0"})
+        self.assertTrue(denied(out))
+
     def test_small_edits_deletes_and_outside_paths_pass(self):
         for c in ["sed -i '' 's/x/y/' src/old.ts", "rm src/old.ts", "ls src && cat src/old.ts",
                   f"cat > notes.md <<'EOF'\n{self.BIG}\nEOF", f"cat > /tmp/src/x.ts <<'EOF'\n{self.BIG}\nEOF"]:
@@ -2059,6 +2090,169 @@ class RuntimeRmGuardInstallTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 실행 시점 git 가드(bin/git, 0.43.0) — 정적 가드와 같은 정책(hooks/gitpolicy.py)을 bash 가 해석을 끝낸 실제 인자에 건다
+# ─────────────────────────────────────────────────────────────────────────────
+GIT_REC = """#!/bin/sh
+# 기록용 진짜 git — 설정 조회(config --get/--get-regexp)에는 테스트가 정한 값을 답한다. 래퍼의 설정 조회는 전역 옵션을
+# 앞에 붙이므로(-C . config …) 그 한 쌍을 건너뛰고 본다
+A1=$1; A2=$2; A3=$3
+if [ "$1" = "-C" ] || [ "$1" = "-c" ]; then A1=$3; A2=$4; A3=$5; fi
+if [ "$A1" = "config" ] && [ "$A2" = "--get" ]; then
+  case "$A3" in alias.pf) echo "push --force"; exit 0;; alias.co) echo "commit -m x"; exit 0;;
+               alias.sh) echo "!git status"; exit 0;;
+               clean.requireForce) [ -n "$REQ" ] && { echo "$REQ"; exit 0; };; esac
+  exit 1
+fi
+if [ "$A1" = "config" ] && [ "$A2" = "--get-regexp" ]; then
+  [ -n "$RPUSH" ] && { echo "$RPUSH"; exit 0; }
+  exit 1
+fi
+if [ "$3" = "rev-parse" ]; then echo abc123; exit 0; fi
+for a in "$@"; do printf '%s\\037' "$a" >> "$__OUT"; done
+printf '\\036' >> "$__OUT"
+"""
+
+
+class GitWrapperTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(os.path.realpath(self.tmp.name))
+        self.rec = self.home / "real-git"
+        self.rec.write_text(GIT_REC)
+        self.rec.chmod(0o755)
+        self.out = self.home / "out.bin"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_git(self, args, extra=None, shell=None):
+        if self.out.exists():
+            self.out.unlink()
+        env = {"PATH": f"{ROOT / 'bin'}:/usr/bin:/bin", "HOME": str(self.home), "HARNESS_REAL_GIT": str(self.rec),
+               "__OUT": str(self.out), "HARNESS_PROJECT_DIR": str(self.home), **(extra or {})}
+        cmd = [sys.executable, str(ROOT / "bin" / "git"), *args] if shell is None else ["bash", "-c", shell]
+        return subprocess.run(cmd, cwd=str(self.home), env=env, capture_output=True, text=True, timeout=20)
+
+    def reached(self) -> list:
+        if not self.out.exists():
+            return []
+        return [c.split("\x1f")[:-1] for c in self.out.read_text().split("\x1e") if c]
+
+    def test_destructive_real_args_are_blocked_with_next_action(self):
+        for args in (["push", "--force"], ["push", "origin", "+main"], ["reset", "--hard"], ["branch", "-Df", "x"],
+                     ["clean", "-fd"], ["commit", "-m", "x"], ["-C", ".", "push", "-f"], ["checkout", "--", "."]):
+            with self.subTest(args=args):
+                p = self.run_git(args)
+                self.assertEqual(p.returncode, 1, p.stderr)
+                self.assertIn("다음 행동", p.stderr)
+                self.assertEqual(self.reached(), [])
+
+    def test_routine_git_reaches_the_real_git_unchanged(self):
+        for args in (["status"], ["push", "--force-with-lease", "origin", "main"], ["branch", "-d", "x"],
+                     ["reset", "--soft", "HEAD~1"], ["log", "--oneline", "-3"]):
+            with self.subTest(args=args):
+                p = self.run_git(args)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.reached(), [args])
+
+    def test_what_the_static_guard_cannot_see_is_seen_here(self):
+        # 정적 가드는 글자를 추측한다 — 변수·$(…)·eval·배열·xargs·별칭은 여기서는 이미 풀린 인자다
+        for sh in ("F=--force; git push $F", "git $(echo push) $(echo -f)", "eval \"git push -f\"",
+                   "A=(reset --hard); git \"${A[@]}\"", "echo -D x | xargs git branch",
+                   "git -c alias.zz='push --force' zz", "git pf"):
+            with self.subTest(sh=sh):
+                p = self.run_git([], shell=sh)
+                self.assertNotEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.reached(), [])
+
+    def test_approved_commit_passes_unless_verify_failed(self):
+        p = self.run_git(["commit", "-m", "x"], {"CLAUDE_COMMIT_APPROVED": "1"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.reached(), [["commit", "-m", "x"]])
+        # 별칭으로 부른 커밋도 커밋이다
+        self.assertEqual(self.run_git(["co"]).returncode, 1)
+        # 훅 기록이 지금 HEAD 위의 FAIL 이면 승인 커밋도 막는다. HEAD 가 바뀌었으면(그 뒤 커밋) 판단하지 않는다
+        state = self.home / ".claude" / "state"
+        state.mkdir(parents=True)
+        for head, code in (("abc123", 1), ("old999", 0)):
+            with self.subTest(head=head):
+                (state / "verdicts.jsonl").write_text(json.dumps({"agent_type": "verifier", "verdict": "FAIL", "head": head}) + "\n")
+                self.assertEqual(self.run_git(["commit", "-m", "x"], {"CLAUDE_COMMIT_APPROVED": "1"}).returncode, code)
+
+    def test_shell_alias_is_blocked(self):
+        # `!` 별칭 — git 은 셸을 띄우기 전에 자기 exec-path(진짜 git 이 있는 곳)를 PATH 앞에 둔다. 그 안의 git 은
+        # 이 래퍼를 지나지 않으므로 여기서 막는다(0.43.0 초안은 "다시 지난다"고 가정하고 통과시켰다 — push 전 보안 리뷰)
+        p = self.run_git(["sh"])
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("다음 행동", p.stderr)
+        self.assertEqual(self.reached(), [])
+
+    def test_policy_follows_git_semantics_not_spelling(self):
+        # 별칭은 git 과 같은 규칙으로 펼친다(내장 명령 우선·따옴표 분리), 긴 옵션은 git 처럼 접두어도 그 옵션이다
+        for args in (["-c", "alias.push=status", "push", "--force", "origin", "main"],
+                     ["-c", "alias.reset=status", "reset", "--hard"], ["-c", "alias.branch=log", "branch", "-D", "x"],
+                     ["-c", "alias.x=!git push --force", "x"], ["-c", 'alias.p=push "--force"', "p"],
+                     ["-c", "alias.p=push '-f'", "p"], ["reset", "--har"], ["clean", "--forc"],
+                     ["push", "--delet", "origin", "main"], ["branch", "--delet", "--forc", "x"], ["Reset", "--hard"]):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_git(args).returncode, 1)
+                self.assertEqual(self.reached(), [])
+        # 승인 표식은 실제 commit 에만 — 별칭 이름으로 다른 명령을 승인시키지 못한다
+        p = self.run_git(["-c", "alias.push=commit", "push", "--force"], {"CLAUDE_COMMIT_APPROVED": "1"})
+        self.assertEqual(p.returncode, 1, p.stderr)
+        # 설정이 동작을 바꾸는 것 — 설정 refspec 의 강제 push, clean.requireForce=false 의 -f 없는 clean
+        for args, env in ((["-c", "remote.origin.push=+HEAD:main", "push"], None),
+                          (["-c", "clean.requireForce=false", "clean", "-d"], None), (["clean", "-d"], {"REQ": "false"}),
+                          (["push"], {"RPUSH": "remote.origin.push +HEAD:main"}),
+                          (["push", "origin"], {"RPUSH": "remote.origin.mirror true"}),
+                          (["branch", "-M", "x", "main"], None), (["branch", "-fm", "x", "main"], None)):
+            with self.subTest(args=args, env=env):
+                self.assertEqual(self.run_git(args, env).returncode, 1)
+                self.assertEqual(self.reached(), [])
+        for args, env in ((["clean", "-n"], {"REQ": "false"}), (["clean", "-d"], None),
+                          (["push"], {"RPUSH": "remote.origin.push refs/heads/main:refs/heads/main"}),
+                          (["branch", "-m", "old", "new"], None)):
+            with self.subTest(args=args, env=env):
+                self.assertEqual(self.run_git(args, env).returncode, 0)
+        for args in (["-c", "alias.st=status", "st"], ["restore", "--stag", "f"], ["push", "--force-with-lease"]):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_git(args).returncode, 0)
+                self.assertEqual(self.reached(), [args])
+
+    def test_broken_policy_fails_closed_only_for_risky_subcommands(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d)
+            (fake / "bin").mkdir()
+            (fake / "hooks").mkdir()
+            shutil.copy(ROOT / "bin" / "git", fake / "bin" / "git")
+            (fake / "hooks" / "gitpolicy.py").write_text("raise ImportError('broken')\n")
+            env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "HARNESS_REAL_GIT": str(self.rec), "__OUT": str(self.out)}
+            run = lambda *a: subprocess.run([sys.executable, str(fake / "bin" / "git"), *a], env=env, cwd=str(self.home),
+                                            capture_output=True, text=True, timeout=20).returncode
+            self.assertEqual(run("push", "-f"), 1)
+            self.assertEqual(run("status"), 0)
+
+    def test_other_version_wrapper_on_path_does_not_loop(self):
+        # rm 래퍼의 0.36.0–0.42.0 무한 execv 를 git 에서 처음부터 막는다 — 다른 디렉터리의 래퍼는 진짜 git 이 아니다
+        with tempfile.TemporaryDirectory() as d:
+            other = Path(os.path.realpath(d), "other-bin")
+            other.mkdir()
+            shutil.copy(ROOT / "bin" / "git", other / "git")
+            real = Path(os.path.realpath(d), "real")
+            real.mkdir()
+            shutil.copy(self.rec, real / "git")
+            for first, second in ((ROOT / "bin", other), (other, ROOT / "bin")):
+                with self.subTest(first=first.name):
+                    if self.out.exists():
+                        self.out.unlink()
+                    env = {"PATH": f"{first}:{second}:{real}:/usr/bin:/bin", "HOME": str(self.home), "__OUT": str(self.out)}
+                    p = subprocess.run(["bash", "-c", "git status"], capture_output=True, text=True, env=env,
+                                       cwd=str(self.home), timeout=20)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    self.assertEqual(self.reached(), [["status"]])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 관할(hooks/scope.py) — T0 는 어디서나, T1 은 하네스 관할 프로젝트에서만. 같은 입력의 쌍으로 본다.
 # ─────────────────────────────────────────────────────────────────────────────
 def _scope():
@@ -2630,7 +2824,7 @@ class ShellParseCompletenessTest(unittest.TestCase):
     def test_no_hook_keeps_its_own_launcher_or_git_option_table(self):
         import ast
         bad = []
-        files = [p for p in HOOKS.glob("*.py") if p.name != "shellparse.py"] + [ROOT / "bin" / "rm"]
+        files = [p for p in HOOKS.glob("*.py") if p.name != "shellparse.py"] + [ROOT / "bin" / "rm", ROOT / "bin" / "git"]
         for f in files:
             tree = ast.parse(f.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
