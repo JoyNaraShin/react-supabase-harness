@@ -288,8 +288,9 @@ def markdown(res: dict) -> str:
 # 샌드박스 안의 /home/cwd 가 홈 규칙에 먼저 먹히지 않게 샌드박스부터.
 _SCRUB = [(re.compile(r"(?:/private)?/tmp/e-[A-Za-z0-9]+/home/cwd"), "<cwd>"),
           (re.compile(r"(?:/private)?/tmp/e-[A-Za-z0-9]+"), "<sandbox>"),
-          (re.compile(r"(?:/private)?/(?:tmp|var/folders)/claude-\d+(?:/[^\s\"'`)]*)?"), "<tmp>"),
-          (re.compile(r"/(?:Users|home)/[^/\s\"'`]+"), "~")]
+          (re.compile(r"(?:/private)?/(?:tmp/(?:claude-\d+|tmp\.\w+)|var/folders)(?:/[^\s\"'`)]*)?"), "<tmp>"),
+          (re.compile(r"/(?:Users|home)/[^/\s\"'`]+|/root(?=[/\s\"'`]|$)"), "~"),
+          (re.compile(r"[A-Za-z]:\\{1,2}Users\\{1,2}[^\\\s\"'`]+"), "~")]
 
 
 def scrub(v):
@@ -300,7 +301,7 @@ def scrub(v):
     if isinstance(v, list):
         return [scrub(x) for x in v]
     if isinstance(v, dict):
-        return {k: scrub(x) for k, x in v.items()}
+        return {scrub(k): scrub(x) for k, x in v.items()}
     return v
 
 
@@ -310,6 +311,12 @@ def publish(paths: list, dest: str, res: dict) -> int:
     missing = [p for p, m in metas if m is None]
     if missing:
         print(f"publish 거부: meta.json 없음 {missing[:3]}", file=sys.stderr)
+        return 1
+    # 빈 meta({})·출처 필드 누락은 "모른다"이지 clean 이 아니다 — 명시적으로 clean·40자 SHA·버전이 있을 때만
+    unknown = [p for p, m in metas if m.get("dirty") is not False
+               or not re.fullmatch(r"[0-9a-f]{40}", str(m.get("sha") or "")) or not m.get("pluginVersion")]
+    if unknown:
+        print(f"publish 거부: 출처 불완전(dirty 가 false 가 아니거나 SHA·버전 없음) {unknown[:3]}", file=sys.stderr)
         return 1
     dirty = [p for p, m in metas if m.get("dirty")]
     shas = {m.get("sha") for _, m in metas}
@@ -340,7 +347,7 @@ def publish(paths: list, dest: str, res: dict) -> int:
     head = (f"# eval {m0.get('pluginVersion')} — {m0.get('sha')}\n\n"
             f"- 모델: {', '.join(sorted({str(m.get('model')) for _, m in metas}))} · runs {', '.join(sorted({str(m.get('runs')) for _, m in metas}))}"
             f" · Claude Code {', '.join(sorted({str(m.get('claudeVersion')) for _, m in metas}))}\n"
-            f"- 원자료: `raw/` (결과 JSON 과 출처 meta). 집계 재현: `python3 scripts/eval-report.py --min-k {res['minK']} raw/*.json` (meta 는 자동 제외)\n\n")
+            f"- 원자료: `raw/` (결과 JSON 과 출처 meta). 집계 재현(레포 루트에서): `python3 scripts/eval-report.py --min-k {res['minK']} {d.as_posix()}/raw/*.json` (meta 는 자동 제외)\n\n")
     (d / "REPORT.md").write_text(head + markdown(res), encoding="utf-8")
     print(f"공개본: {d}")
     return 0
@@ -355,7 +362,11 @@ def main() -> int:
     ap.add_argument("--gate", action="store_true", help="축별 게이트 — 위반이 있으면 exit 1")
     ap.add_argument("--publish", metavar="DIR", help="단일 SHA·clean 결과를 DIR 에 공개본으로 묶는다")
     a = ap.parse_args()
-    files = [f for f in a.files if not f.endswith(".meta.json")]
+    files, seen = [], set()
+    for f in a.files:                               # 같은 파일을 두 번 주면 k 가 두 배로 센다 — 실경로로 한 번만
+        if not f.endswith(".meta.json") and os.path.realpath(f) not in seen:
+            seen.add(os.path.realpath(f))
+            files.append(f)
     res = aggregate(files, latest=a.latest, min_k=a.min_k)
     if a.publish:
         return publish(files, a.publish, res)

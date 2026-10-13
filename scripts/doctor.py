@@ -180,7 +180,8 @@ def check_evals():
 
 # 공개 수치는 공개본을 가리켜야 한다 — 머리만 바꾸고 원자료를 안 올리거나, 다른 버전의 원자료를 두는 드리프트.
 # 로컬 경로 검사는 eval-report --publish 의 스크럽이 놓친 것을 잡는 두 번째 그물이다(0.42.2 에서 자유 텍스트 누출 실측).
-LOCAL_PATH = re.compile(r"/Users/[^/\s\"'`]+/|/home/(?!cwd\b)[^/\s\"'`]+/|/private/tmp/|/var/folders/")
+LOCAL_PATH = re.compile(r"/Users/[^/\s\"'`<]|/home/(?!cwd\b)[^/\s\"'`]|/root(?=[/\s\"'`]|$)|/tmp/(?:claude-|e-|tmp\.)"
+                        r"|/var/folders/|[A-Za-z]:\\{1,2}Users\\")
 
 
 def check_published():
@@ -196,10 +197,13 @@ def check_published():
     if not metas:
         bad(d.relative_to(ROOT), "raw/*.meta.json 없음 — 출처 없는 원자료")
     for mp in metas:
-        if json.loads(mp.read_text()).get("pluginVersion") != m.group(1):
+        meta = json.loads(mp.read_text())
+        if meta.get("pluginVersion") != m.group(1):
             bad(mp.relative_to(ROOT), f"pluginVersion ≠ README 머리 {m.group(1)}")
+        if meta.get("dirty") is not False or not re.fullmatch(r"[0-9a-f]{40}", str(meta.get("sha") or "")):
+            bad(mp.relative_to(ROOT), "출처가 clean 단일 커밋이 아니다(dirty 가 false 가 아니거나 40자 SHA 없음)")
     for f in sorted(ROOT.glob("evals/published/**/*")):
-        if f.is_file() and f.suffix in (".json", ".md") and LOCAL_PATH.search(f.read_text(encoding="utf-8")):
+        if f.is_file() and LOCAL_PATH.search(f.read_text(encoding="utf-8", errors="replace")):
             bad(f.relative_to(ROOT), "로컬 경로가 남아 있다 — eval-report --publish 로 다시 만든다")
 
 

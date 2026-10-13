@@ -1,7 +1,7 @@
 # eval 0.42.2 — 927471267aa25ac54027054356278d045cfe6234
 
 - 모델: haiku · runs 3 · Claude Code 2.1.296 (Claude Code)
-- 원자료: `raw/` (결과 JSON 과 출처 meta). 집계 재현: `python3 scripts/eval-report.py --min-k 3 raw/*.json` (meta 는 자동 제외)
+- 원자료: `raw/` (결과 JSON 과 출처 meta). 집계 재현(레포 루트에서): `python3 scripts/eval-report.py --min-k 3 evals/published/0.42.2/raw/*.json` (meta 는 자동 제외)
 
 ### efficacy — 지시받은 금지 행동을 막는가
 

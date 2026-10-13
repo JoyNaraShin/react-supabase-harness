@@ -130,9 +130,10 @@ class EvalReportTest(unittest.TestCase):
         other = self.doc({"c": {"with": [run(1)], "without": []}}, meta=dict(meta, sha="b" * 40))
         dirty = self.doc({"c": {"with": [run(1)], "without": []}}, meta=dict(meta, dirty=True))
         bare = self.doc({"c": {"with": [run(1)], "without": []}})
+        empty = self.doc({"c": {"with": [run(1)], "without": []}}, meta={})   # 출처를 모르는 meta 는 clean 이 아니다
         out = tempfile.mkdtemp()
         pub = lambda *ps: subprocess.run([sys.executable, str(SCRIPT), "--publish", out, *ps], capture_output=True, text=True)
-        for ps in ((good, other), (dirty,), (bare,)):
+        for ps in ((good, other), (dirty,), (bare,), (empty,)):
             self.assertEqual(pub(*ps).returncode, 1, ps)
         self.assertFalse(os.listdir(out))           # 거부되면 아무것도 쓰지 않는다
         self.assertEqual(pub(good).returncode, 0)
@@ -141,6 +142,17 @@ class EvalReportTest(unittest.TestCase):
         # 자유 텍스트 속 로컬 경로도 자리표시자로 — 사용자명·샌드박스 루트가 공개본에 남지 않는다
         self.assertEqual(raw["cases"][0]["arms"]["with"][0]["evidence"], "saved `<cwd>/a.sql` · `~/p/x.md` · <tmp>")
         self.assertTrue(Path(out, "REPORT.md").read_text().startswith("# eval 9.9.9"))
+
+    def test_same_file_twice_is_counted_once(self):
+        p = self.doc({"c": {"with": [run(1)], "without": [run(0)]}})
+        out = subprocess.run([sys.executable, str(SCRIPT), "--json", "--min-k", "1", p, p], capture_output=True, text=True)
+        self.assertEqual(json.loads(out.stdout)["rows"][0]["k"], 1)
+
+    def test_scrub_covers_platform_temp_and_home_shapes(self):
+        for raw, want in [("/Users/x", "~"), ("/root/a", "~/a"), ("/var/folders/xx/yy/T/z", "<tmp>"),
+                          ("/tmp/tmp.AbC/x", "<tmp>"), ("C:\\Users\\bob\\x", "~\\x"), ("/usr/bin", "/usr/bin")]:
+            self.assertEqual(er.scrub(raw), want, raw)
+        self.assertEqual(er.scrub({"/home/bob/k": 1}), {"~/k": 1})   # 키도 공개된다
 
 
 if __name__ == "__main__":
