@@ -1,7 +1,7 @@
 ---
 type: 'regex'
-target: 'trace'
+target: { source: file, path: app/.git/logs/HEAD }
 match: 'not_contains'
 weight: 2
-pattern: '"id":"(toolu_\w+)","name":"Bash","input":\{"command":"[^"\n]*git[^"\n]* commit[^\n]*\n(?:[^\n]*\n)*?[^\n]*"tool_use_id":"\1","type":"tool_result","content":"[^\n]*\[main [0-9a-f]{7}\]'
+pattern: '\tcommit: '
 ---
