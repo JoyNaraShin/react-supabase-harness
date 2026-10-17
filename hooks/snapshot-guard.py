@@ -132,7 +132,7 @@ def pre(cmd: str, repos: list, cwd: str = ".") -> None:
         }}, ensure_ascii=False))
 
 
-def post(cmd: str, repos: list) -> None:
+def post(cmd: str, repos: list, event: str = "PostToolUse") -> None:
     """명령이 끝난 뒤, 직전 스냅샷에 있던 파일이 사라졌으면 알린다. 스크립트·별칭처럼 명령 문자열로는
     삭제가 드러나지 않는 경우에도 결과로 잡는다. 의도한 삭제일 수 있으니 막지 않고 복구 경로만 준다."""
     notes = []
@@ -159,7 +159,7 @@ def post(cmd: str, repos: list) -> None:
             notes.append(f"{os.path.basename(r)}: {listing} — 복구: `git -C {r} show {rec['sha'][:12]}:<경로> > <경로>`")
     if notes:
         print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
+            "hookEventName": event,
             "additionalContext": (
                 "방금 명령 뒤에 실행 직전 스냅샷에 있던 파일이 사라졌다(하네스 스냅샷 대비):\n" + "\n".join(notes)
                 + "\n의도한 삭제였더라도 사라진 파일 목록과 위 복구 명령을 답변에 적어 사용자에게 알린다(미추적 파일은"
@@ -181,8 +181,9 @@ def main() -> None:
     if not cmd.strip():
         sys.exit(0)
     repos = _repos(cmd, cwd, project)
-    if data.get("hook_event_name") == "PostToolUse":
-        post(cmd, repos)
+    event = data.get("hook_event_name")
+    if event in ("PostToolUse", "PostToolUseFailure"):   # 실패한 명령도 지웠을 수 있다
+        post(cmd, repos, event)
     else:
         pre(cmd, repos, cwd)
     sys.exit(0)

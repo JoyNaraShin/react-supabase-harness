@@ -57,6 +57,7 @@
       ],
       "action": "deny",
       "off": "ui-lib-gate-off",
+      "afterNext": "이 명령이 넣은 것을 되돌려라(예: 패키지 매니저의 remove). 필요한 도입이면 사용자에게 이유를 설명하고 결정을 받는다.",
       "message": "🚫 외부 UI 라이브러리 `{match}` 도입 차단 — RULES §8 기본 정책(외부 UI 컴포넌트 라이브러리를 쓰지 않는다).\n정본 = Tailwind v4 `@theme` 토큰 + 자체 `components/ui` 프리미티브."
     },
 
@@ -96,8 +97,10 @@
       "id": "plan-first",
       // RULES §1 「Plan vs Execute — 코드 먼저 금지」
       // 소규모 편집(20줄·800자 이하)은 통과 — RULES §1 "한 문장 diff" 예외의 기계적 정의.
-      // Bash 는 쓰기 대상(heredoc·cp·sed -i 등, hooks/shellparse.py)으로 같은 판정을 받는다
+      // Bash 는 두 번 본다: 실행 전엔 명령 글자에서 읽은 쓰기 대상(안내 — 막히는 이유를 먼저 알려 준다),
+      // 실행 뒤엔 명령이 실제로 만들거나 바꾼 파일(보장 — `python -c`·스크립트·생성기 어떤 표기든)
       "on": ["Write", "Edit", "Bash"],
+      "after": ["Bash"],
       "when": [
         { "not": true, "escapeHatch": "plan-gate-off" },
         { "harnessTarget": true },
@@ -115,6 +118,7 @@
       ],
       "action": "deny",
       "off": "plan-gate-off",
+      "afterNext": "이 명령이 만든 코드 파일은 지우고, 고친 파일은 되돌려라(직전 스냅샷이 있으면 `git show <스냅샷>:<경로> > <경로>`). 그다음 사용자에게 `/react-supabase-harness:phase` 로 슬라이스 플랜을 먼저 쓰자고 요청한다.",
       "message": "🚫 플랜 없이 코드 작성 차단 ({match}) — RULES §1 「Plan vs Execute, 코드 먼저 금지」.\n`docs/plans/` 에 plan 이 0개다(템플릿 제외).\n\n다음 행동 — 사용자에게 `/react-supabase-harness:phase` 실행을 요청해 슬라이스 플랜을 먼저 쓴다(스킬은 사용자 호출 전용이라 에이전트가 직접 부를 수 없다). 플랜 없이 진행해야 하는 사정이면 사용자에게 알리고 결정을 받는다."
     }
   ]

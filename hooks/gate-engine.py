@@ -61,7 +61,10 @@ def ctx_from(data: dict) -> dict:
         "edits": edits,
         "root": root,
         "cwd": str(data.get("cwd") or root),
-        "phase": "post" if data.get("hook_event_name") == "PostToolUse" else "pre",
+        # 실패한 명령(종료 코드 ≠ 0)은 PostToolUse 가 아니라 PostToolUseFailure 로 온다 — 쓰기는 이미 일어났을 수 있다
+        "phase": "post" if data.get("hook_event_name") in ("PostToolUse", "PostToolUseFailure") else "pre",
+        "event": str(data.get("hook_event_name") or ""),
+        "tool_use_id": str(data.get("tool_use_id") or ""),
     }
 
 
@@ -96,6 +99,223 @@ def _bash_writes(ctx) -> list:
                         out.append((p.replace("\\", "/"), verb))
         ctx["writes"] = out
     return ctx["writes"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 실행 전후 대조 — `after` 룰의 경로 판정은 명령 글자가 아니라 **명령이 실제로 바꾼 파일**로 한다.
+# 실행 전(PreToolUse)에 룰의 상태 조건(관할·탈출구·plan 유무 등)이 참이면 경로 패턴에 맞는 파일의 stat 을
+# 남기고, 실행 뒤(PostToolUse)에 다시 재서 생기거나 바뀐 파일만 본다. `python -c`·스크립트·생성기·어떤 표기로
+# 썼든 같다. 상태 조건이 거짓이면(예: plan 이 이미 있다) 아무것도 재지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+STATE_PREDICATES = {"escapeHatch", "harnessTarget", "globExists", "verdict"}
+SKIP_DIRS = {".git", "node_modules", "dist", "build", ".next", ".turbo", ".vercel", "coverage", ".venv", "venv"}
+
+
+def _pre_dir(root):
+    """실행 전 기록 위치 — 프로젝트의 `.claude/state/gate-pre/`(에이전트 쓰기는 자기 보호가 막는다).
+    공용 임시 디렉터리는 다른 사용자가 미리 만들어 둘 수 있어 쓰지 않는다. 링크·남의 소유면 기록하지 않는다."""
+    d = os.path.join(os.path.realpath(str(root)), ".claude", "state", "gate-pre")
+    try:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        for x in (os.path.dirname(os.path.dirname(d)), os.path.dirname(d), d):
+            st = os.lstat(x)
+            if os.path.islink(x) or (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+                return None
+        ign = os.path.join(d, ".gitignore")         # 사용자 저장소의 git status 에 나오지 않게(.claude/state 가 무시 대상이 아닐 수 있다)
+        if not os.path.lexists(ign):
+            with open(ign, "w", encoding="utf-8") as fh:
+                fh.write("*\n")
+    except OSError:
+        return None
+    return d
+
+
+def _pre_file(ctx):
+    d = _pre_dir(ctx["root"]) if ctx["tool_use_id"] else None
+    return os.path.join(d, re.sub(r"[^A-Za-z0-9_-]", "_", ctx["tool_use_id"])[:120] + ".json") if d else None
+
+
+def _project_files(root) -> list:
+    """프로젝트 파일(절대 경로). git 이면 추적+미추적(ignore 제외), 아니면 걸어서(무거운 디렉터리 제외)."""
+    import subprocess
+    base = os.path.realpath(str(root))
+    try:
+        r = subprocess.run(["git", "-C", base, "ls-files", "-z", "-co", "--exclude-standard"], capture_output=True,
+                           timeout=10)
+        if r.returncode == 0:
+            return [os.path.join(base, f) for f in r.stdout.decode("utf-8", "replace").split("\0") if f]
+    except Exception:
+        pass
+    out = []
+    for d, dirs, files in os.walk(base):
+        dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
+        out += [os.path.join(d, f) for f in files]
+        if len(out) > 50000:
+            break
+    return out
+
+
+TEXT_KEEP, TEXT_BUDGET = 256 * 1024, 8 * 1024 * 1024    # 실행 뒤 변경량을 재려고 실행 전 내용을 남기는 한도
+
+
+def _stat_map(root, pats: list, keep_text: bool = False) -> dict:
+    """{경로: [mtime_ns, 크기, 내용|None]}. 내용은 keep_text 일 때 한도 안에서만."""
+    out, budget = {}, TEXT_BUDGET
+    for f in _project_files(root):
+        g = f.replace("\\", "/")
+        if any(fnmatch.fnmatch(g, x) for x in pats):
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            text = None
+            if keep_text and st.st_size <= TEXT_KEEP and st.st_size <= budget:
+                try:
+                    with open(f, "rb") as fh:
+                        text = fh.read().decode("utf-8", "replace")
+                    budget -= st.st_size
+                except OSError:
+                    text = None
+            out[g] = [st.st_mtime_ns, st.st_size, text]
+    return out
+
+
+def _after_globs(rule: dict) -> list:
+    return [x for c in rule.get("when", []) if "pathGlob" in c and not c.get("not")
+            for x in (c["pathGlob"] if isinstance(c["pathGlob"], list) else [c["pathGlob"]])]
+
+
+def _prestate_pats(ctx: dict, rules: list) -> list:
+    """실행 뒤 대조가 필요한 경로 패턴 — `after` 에 이 도구가 있고 상태 조건(관할·탈출구·plan 유무)이 참인 룰만."""
+    pats = []
+    for rule in rules:
+        if rule.get("enabled") is False or ctx["tool"] not in (rule.get("after") or []):
+            continue
+        globs = _after_globs(rule)
+        if not globs:
+            continue
+        state = {"when": [c for c in rule.get("when", []) if any(k in STATE_PREDICATES for k in c)]}
+        if evaluate(state, dict(ctx)) is not None:
+            pats += globs
+    return pats
+
+
+def record_prestate(ctx: dict, pats: list) -> bool:
+    """PreToolUse — 실행 뒤 대조할 기준을 남긴다. 실패하면 False(실행 뒤에 '기준 없음'이 된다)."""
+    f = _pre_file(ctx)
+    if not f or not pats:
+        return False
+    import time
+    d = os.path.dirname(f)
+    for old in os.listdir(d):                    # 짝(실행 뒤 훅)을 못 만난 기록 — 하루 지나면 지운다
+        x = os.path.join(d, old)
+        try:
+            if old.endswith(".json") and not os.path.islink(x) and time.time() - os.path.getmtime(x) > 86400:
+                os.remove(x)
+        except OSError:
+            pass
+    with open(f, "w", encoding="utf-8") as fh:
+        json.dump({"pats": pats, "files": _stat_map(ctx["root"], pats, keep_text=True)}, fh)
+    return True
+
+
+def _changed(ctx: dict):
+    """실행 뒤 — 이 명령이 만들거나 바꾼 파일 [(경로, 새 파일인가)]. 실행 전 기준이 없으면 None."""
+    if "changed" not in ctx:
+        ctx["changed"], ctx["pre_files"] = None, {}
+        f = _pre_file(ctx)
+        try:
+            with open(f, encoding="utf-8") as fh:
+                pre = json.load(fh)
+            os.remove(f)
+        except Exception:
+            pre = None
+        if pre:
+            ctx["pre_files"] = pre["files"]
+            now = _stat_map(ctx["root"], pre["pats"])
+            ctx["changed"] = [(p, p not in pre["files"]) for p, s in sorted(now.items())
+                              if (pre["files"].get(p) or [None, None])[:2] != s[:2]]
+    return ctx["changed"]
+
+
+def _head_text(root, path: str):
+    import subprocess
+    rel = os.path.relpath(path, os.path.realpath(str(root))).replace("\\", "/")
+    try:
+        r = subprocess.run(["git", "-C", str(root), "show", "HEAD:./" + rel], capture_output=True, timeout=5)
+    except Exception:
+        return None
+    return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+
+
+def _change_size(ctx: dict, path: str, lines: int, chars: int, is_new: bool):
+    """이 명령이 바꾼 양이 '한 문장 diff' 를 넘는가 — 실행 **전** 내용과 비교한다(HEAD 가 아니다: 앞선 작은 편집들이
+    쌓인 파일을 한 글자 고쳐도 막히면 안 된다). 지금 내용이 HEAD 와 같으면 되돌림·pull·브랜치 전환이라 보지 않는다.
+    새 파일은 크기와 무관하게 큼(Write 와 같은 축)."""
+    try:
+        with open(path, "rb") as fh:
+            now = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return False, ""
+    if now == _head_text(ctx["root"], path):
+        return False, ""
+    name = os.path.basename(path)
+    if is_new:
+        return True, f"신규 파일 {name} (명령 결과)"
+    before = (ctx.get("pre_files", {}).get(path) or [None, None, None])[2]
+    if before is None:
+        return True, f"{name} 변경량 판정 불가 (명령 결과)"
+    import difflib
+    diff = [x for x in difflib.unified_diff(before.splitlines(), now.splitlines(), lineterm="", n=0)
+            if x[:1] in "+-" and not x.startswith(("+++", "---"))]
+    # Edit 은 new_string(들어간 내용)으로 잰다 — 같은 축으로 들어간 줄만 센다(한 줄 수정 = 1, 지우기만 = 0)
+    adds = [x for x in diff if x[0] == "+"]
+    n, c = len(adds), sum(len(x) - 1 for x in adds)
+    return (n > lines or c > chars), f"{name} {n}줄 변경 (명령 결과)"
+
+
+# 백그라운드 — 실행 뒤 훅이 돌 때 아직 쓰지 않았을 수 있다(결과를 잴 수 없다).
+# `2>&1`·`<&0`·`&>`·`&&`·`|&`·`;&` 는 아니다. 인터프리터 heredoc 본문(`a & b`)·산술(`$((5 & 3))`)·`\&` 도 아니다.
+_BG = re.compile(r"(?<![&|<>;])&(?![&>])")
+_ARITH = re.compile(r"\$\(\([^()]*\)\)")
+# 명령어 자체가 떼어 놓고 도는 것 — 목록은 닫히지 않는다(인터프리터 안의 분리 실행은 README 「알려진 한계」)
+_DETACH = {"coproc", "setsid", "disown", "at", "batch"}
+
+
+def _join_quoted_lines(cmd: str) -> str:
+    out, q, i = [], None, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if q is None and ch == "\\" and i + 1 < len(cmd):
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if q == '"' and ch == "\\" and i + 1 < len(cmd):
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif q == ch:
+            q = None
+        out.append(" " if (q and ch == "\n") else ch)
+        i += 1
+    return "".join(out)
+
+
+def _backgrounded(ctx: dict) -> bool:
+    if ctx["input"].get("run_in_background"):
+        return True
+    cmd = shellparse.strip_heredoc_bodies(ctx["command"], shell_only=True).replace("\\&", "  ")
+    if _BG.search(_ARITH.sub(" ", shellparse.neutralize_quotes(cmd))):
+        return True
+    # 따옴표 안의 줄바꿈은 명령 구분이 아니다 — 커밋 메시지의 "at least …" 줄을 `at` 명령으로 읽었다(3차 리뷰)
+    for seg, _ in shellparse.segments(_join_quoted_lines(cmd), str(ctx.get("cwd") or "."), shell_only=True):
+        toks = shellparse.tokens(seg)
+        if toks and (toks[0] in _DETACH or (toks[0] in ("tmux", "screen") and any(
+                t in ("-d", "-dm", "-dmS") or (t.startswith("-") and "d" in t[1:]) for t in toks[1:]))):
+            return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +390,10 @@ def _pkg_hit(spec: str, banned: list):
 
 def p_path_glob(ctx, a):
     pats = a if isinstance(a, list) else [a]
+    if ctx["tool"] == "Bash" and ctx["phase"] == "post":
+        hits = [(p, new) for p, new in (_changed(ctx) or []) if any(fnmatch.fnmatch(p, g) for g in pats)]
+        ctx["matched_changes"] = hits
+        return (bool(hits), hits[0][0] if hits else "")
     if ctx["tool"] == "Bash":
         hits = [w for w in _bash_writes(ctx) if w[0] == UNKNOWN_WRITE or any(fnmatch.fnmatch(w[0], g) for g in pats)]
         ctx["matched_writes"] = hits
@@ -230,7 +454,7 @@ def _introduced_deps(root: Path, banned: list):
             continue
         rel = str(f.relative_to(root))
         try:
-            r = subprocess.run(["git", "-C", str(root), "show", f"HEAD:{rel}"], capture_output=True, text=True,
+            r = subprocess.run(["git", "-C", str(root), "show", f"HEAD:./{rel}"], capture_output=True, text=True,
                                timeout=5)
         except Exception:
             return None
@@ -271,6 +495,12 @@ def p_pkg_ref(ctx, a):
 def p_body_size_over(ctx, a):
     """'한 문장 diff' 예외의 기계적 정의. 신규 파일 생성은 크기와 무관하게 '큼'."""
     lines, chars = a.get("lines", 20), a.get("chars", 800)
+    if ctx["tool"] == "Bash" and ctx["phase"] == "post":
+        for p, new in ctx.get("matched_changes", []):
+            big, m = _change_size(ctx, p, lines, chars, new)
+            if big:
+                return (True, m)
+        return (False, "")
     if ctx["tool"] == "Bash":
         writes = ctx.get("matched_writes", _bash_writes(ctx))
         for p, verb in writes:
@@ -726,10 +956,15 @@ def post_check(ctx: dict) -> None:
         if m is None:
             continue
         msg = (rule.get("message") or f"게이트 `{rule['id']}` 위반").replace("{match}", m)
-        print(json.dumps({"decision": "block", "reason": (
-            "방금 실행한 명령의 결과가 게이트에 걸렸다(설치 표기와 무관하게 결과 파일을 본다).\n" + msg
-            + "\n\n다음 행동: 이 명령이 넣은 것을 되돌려라(예: 패키지 매니저의 remove). 필요한 도입이면 "
-              "사용자에게 이유를 설명하고 결정을 받는다.")}, ensure_ascii=False))
+        msg = msg.split("\n\n다음 행동")[0]          # 실행 전 안내는 실행 뒤에 맞지 않는다 — afterNext 로 바꾼다
+        nxt = rule.get("afterNext") or "이 명령이 바꾼 것을 되돌려라. 필요한 변경이면 사용자에게 이유를 설명하고 결정을 받는다."
+        text = ("방금 실행한 명령의 결과가 게이트에 걸렸다(명령 표기와 무관하게 결과 파일을 본다).\n" + msg
+                + "\n\n다음 행동: " + nxt)
+        if ctx["event"] == "PostToolUseFailure":     # 실패 이벤트는 block 이 없다 — 오류 옆에 붙인다(공식 hooks 문서)
+            out = {"hookSpecificOutput": {"hookEventName": "PostToolUseFailure", "additionalContext": text}}
+        else:
+            out = {"decision": "block", "reason": text}
+        print(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
     sys.exit(0)
 
@@ -755,8 +990,24 @@ def main() -> None:
         }}, ensure_ascii=False))
         sys.exit(0)
 
+    rules = load_rules()
+    try:
+        pats = _prestate_pats(ctx, rules) if ctx["tool"] == "Bash" else []
+    except Exception:
+        pats = []
+    if pats and _backgrounded(ctx):
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "🚫 플랜 없는 관할 프로젝트에서 백그라운드 명령 차단 — RULES §1 「Plan vs Execute」.\n"
+                "plan-first 는 명령이 실제로 쓴 코드 파일을 실행 뒤에 재는데, 백그라운드 명령은 그 시점에 아직 쓰지 않았을 "
+                "수 있다.\n\n다음 행동: 포그라운드로 실행하라(`&`·run_in_background 없이). 코드를 쓰는 작업이면 사용자에게 "
+                "`/react-supabase-harness:phase` 로 슬라이스 플랜을 먼저 쓰자고 요청한다."),
+        }}, ensure_ascii=False))
+        sys.exit(0)
     warns = []
-    for rule in load_rules():
+    for rule in rules:
         if rule.get("enabled") is False:
             continue
         if ctx["tool"] not in (rule.get("on") or []):
@@ -778,6 +1029,11 @@ def main() -> None:
             sys.exit(0)   # 첫 deny 에서 즉시 종료
         warns.append(msg)
 
+    if pats:                                     # 막지 않은 명령만 — 막힌 명령은 실행되지 않으니 기록할 것이 없다
+        try:
+            record_prestate(ctx, pats)
+        except Exception:
+            pass
     if warns:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

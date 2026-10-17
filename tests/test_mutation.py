@@ -124,6 +124,14 @@ MUTANTS = [
     ("heredoc-marker-never", "shellparse.py", "_quote_state", "(tuple(q or ()), None)"),
     ("snapshot-lossy-never", "snapshot-guard.py", "lossy", "False"),
     ("install-args-none", "gate-engine.py", "_install_args", "[]"),
+    # 0.44.0 — plan-first 의 보장 층은 실행 전후 대조(명령이 실제로 바꾼 파일)
+    ("prestate-never", "gate-engine.py", "record_prestate", "None"),
+    ("changed-none", "gate-engine.py", "_changed", "None"),
+    ("change-size-small", "gate-engine.py", "_change_size", "(False, '')"),
+    ("background-never", "gate-engine.py", "_backgrounded", "False"),
+    ("quoted-lines-split", "gate-engine.py", "_join_quoted_lines", "cmd"),
+    ("head-text-none", "gate-engine.py", "_head_text", "None"),
+    ("pre-dir-unchecked", "gate-engine.py", None, ("            if os.path.islink(x) or", "            if False and os.path.islink(x) or")),
     ("commit-boundary-bands-off", "commit-boundary-gate.py", None,
      ("BANDS = (20, 40)", "BANDS = (10**9, 10**9)")),
 ]

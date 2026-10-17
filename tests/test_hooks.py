@@ -19,6 +19,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
 
+# 설치된 하네스의 실행 시점 가드(<플러그인>/bin/git·rm)가 PATH 에 있는 세션에서 돌려도 결과가 같아야 한다 —
+# 픽스처 저장소(임시 디렉터리)의 커밋까지 막혀 HEAD 가 없어지면 판정이 달라진다(0.43.0 설치 직후 실측).
+# 픽스처는 사용자 저장소가 아니다. 래퍼 자체는 GitWrapperTest 가 bin/ 을 직접 PATH 에 넣어 검사한다.
+os.environ["PATH"] = os.pathsep.join(
+    d for d in os.environ.get("PATH", "").split(os.pathsep)
+    if not (d and Path(d).name == "bin" and (Path(d).parent / "hooks" / "rmpolicy.py").is_file()))
+
 # import 구문 픽스처. 한 덩어리로 적으면 설치된 구버전 게이트가 이 파일 자체를 막으므로 패키지명 앞에서 끊는다.
 IMPORT_MUI = "import { Button } from " + '"' + "@mui/material" + '";'
 ADD_UI_LIB = "pnpm add " + "an" + "td"
@@ -1449,6 +1456,165 @@ class PlanFirstShellTest(_RepoCase):
         Path(self.proj, "docs", "plans").mkdir()
         Path(self.proj, "docs", "plans", "phase-1.md").write_text("# plan")
         self.assertIsNone(self.gate("Bash", {"command": f"cat > src/new.ts <<'EOF'\n{self.BIG}\nEOF"}))
+
+
+class PlanFirstOutcomeTest(_RepoCase):
+    """plan-first 의 보장 층 — 명령 글자 대신 명령이 실제로 만들거나 바꾼 파일로 판정한다(실행 전 stat 기준 ↔ 실행 뒤)."""
+    BIG = "\n".join(f"export const v{i} = {i}" for i in range(40))
+
+    def run_cmd(self, write, tid="toolu_1", command="python3 gen.py"):
+        ti = {"command": command}
+        pre = self.hook("gate-engine.py", {"tool_name": "Bash", "tool_input": ti, "hook_event_name": "PreToolUse",
+                                           "tool_use_id": tid})
+        write()
+        post = self.hook("gate-engine.py", {"tool_name": "Bash", "tool_input": ti, "hook_event_name": "PostToolUse",
+                                            "tool_use_id": tid})
+        return pre, post
+
+    def test_code_written_by_any_means_is_caught_after_the_fact(self):
+        # 정적 판정이 읽지 못하는 쓰기 — 인터프리터·스크립트·생성기. 실행 전엔 통과하고 실행 뒤 결과로 걸린다
+        for i, write in enumerate([lambda: Path(self.proj, "src", "gen.ts").write_text(self.BIG),
+                                   lambda: Path(self.proj, "src", "old.ts").write_text(self.BIG),
+                                   lambda: (Path(self.proj, "supabase", "migrations").mkdir(exist_ok=True),
+                                            Path(self.proj, "supabase", "migrations", "1_a.sql").write_text("x"))]):
+            with self.subTest(i=i):
+                pre, post = self.run_cmd(write, tid=f"toolu_{i}")
+                self.assertIsNone(pre)
+                self.assertTrue(blocked(post), post)
+                self.assertIn("다음 행동", post["reason"])
+                self.assertIn("/react-supabase-harness:phase", post["reason"])
+                _git(self.proj, "add", "-A")
+                _git(self.proj, "commit", "-qm", f"step{i}")
+
+    def test_small_change_untouched_files_and_non_code_pass(self):
+        Path(self.proj, "src", "dirty.ts").write_text(self.BIG)          # 이 명령 전부터 있던 변경은 이 명령 탓이 아니다
+        for i, write in enumerate([lambda: Path(self.proj, "src", "old.ts").write_text("y\n"),
+                                   lambda: Path(self.proj, "notes.md").write_text(self.BIG),
+                                   lambda: None]):
+            with self.subTest(i=i):
+                pre, post = self.run_cmd(write, tid=f"toolu_s{i}")
+                self.assertIsNone(post)
+
+    def test_plan_or_hatch_means_nothing_is_measured(self):
+        Path(self.proj, "docs", "plans").mkdir()
+        Path(self.proj, "docs", "plans", "phase-1.md").write_text("# plan")
+        _, post = self.run_cmd(lambda: Path(self.proj, "src", "gen.ts").write_text(self.BIG))
+        self.assertIsNone(post)
+
+    def test_failed_command_is_judged_too(self):
+        # 종료 코드 ≠ 0 은 PostToolUse 가 아니라 PostToolUseFailure 로 온다 — 거기엔 block 이 없어 오류 옆에 붙인다(push 전 리뷰 F2)
+        ti = {"command": "python3 gen.py && false"}
+        self.hook("gate-engine.py", {"tool_name": "Bash", "tool_input": ti, "hook_event_name": "PreToolUse",
+                                     "tool_use_id": "toolu_f"})
+        Path(self.proj, "src", "gen.ts").write_text(self.BIG)
+        out = self.hook("gate-engine.py", {"tool_name": "Bash", "tool_input": ti, "hook_event_name": "PostToolUseFailure",
+                                           "tool_use_id": "toolu_f"})
+        ctx = out["hookSpecificOutput"]
+        self.assertEqual(ctx["hookEventName"], "PostToolUseFailure")
+        self.assertIn("다음 행동", ctx["additionalContext"])
+
+    def test_size_is_measured_against_the_state_before_the_command(self):
+        # HEAD 가 아니라 실행 전 내용 — 앞선 변경이 쌓인 파일의 한 줄 수정, 미추적 파일의 한 줄 수정, HEAD 로의 되돌림은
+        # 이 명령의 큰 변경이 아니다(push 전 리뷰 F1·F1b: 되돌리라는 안내를 따른 명령까지 막혔다)
+        old, u = Path(self.proj, "src", "old.ts"), Path(self.proj, "src", "u.ts")
+        old.write_text(self.BIG)
+        u.write_text(self.BIG)
+        for i, write in enumerate([lambda: old.write_text(self.BIG + "\nexport const z = 1"),
+                                   lambda: u.write_text(self.BIG.replace("v0 ", "w0 ")),
+                                   lambda: old.write_text("x\n")]):
+            with self.subTest(i=i):
+                _, post = self.run_cmd(write, tid=f"toolu_m{i}")
+                self.assertIsNone(post)
+        # 줄을 제자리에서 고친 것은 한 번만 센다(-1 +1 = 1줄) — 15줄 수정은 Edit 처럼 통과한다(2차 리뷰 F4)
+        lines = self.BIG.split("\n")
+        _, post = self.run_cmd(lambda: u.write_text("\n".join(x + " // c" if i < 15 else x for i, x in enumerate(lines))),
+                               tid="toolu_m8")
+        self.assertIsNone(post)
+        # 지우기만 한 것은 Edit(빈 new_string)처럼 작은 변경이다(3차 리뷰)
+        _, post = self.run_cmd(lambda: u.write_text("\n".join(lines[:5])), tid="toolu_m7")
+        self.assertIsNone(post)
+        u.write_text(self.BIG)
+        # 실행 전 내용과 비교해 큰 변경은 그대로 걸린다
+        _, post = self.run_cmd(lambda: u.write_text("\n".join(f"let q{i} = {i}" for i in range(40))), tid="toolu_m9")
+        self.assertTrue(blocked(post))
+
+    def test_background_commands_are_refused_while_measuring(self):
+        # 실행 뒤 훅이 돌 때 백그라운드 명령은 아직 쓰지 않았을 수 있다 — 잴 수 없으면 실행 전에 막는다(push 전 리뷰 F3)
+        for ti in ({"command": "node scripts/codegen.mjs", "run_in_background": True},
+                   {"command": "node scripts/codegen.mjs &"}, {"command": "(node gen.mjs &) ; echo"}):
+            with self.subTest(ti=ti):
+                out = self.gate("Bash", ti)
+                self.assertTrue(denied(out))
+                self.assertIn("다음 행동", reason(out))
+        for ti in ({"command": "coproc python3 gen.py"}, {"command": "setsid -f python3 gen.py"},
+                   {"command": "tmux new-session -d 'python3 gen.py'"}, {"command": "python3 gen.py & disown"}):
+            with self.subTest(ti=ti):
+                self.assertTrue(denied(self.gate("Bash", ti)))
+        # 2차 리뷰 F2 — 셸의 백그라운드가 아닌 `&`
+        for ti in ({"command": "npm run build 2>&1 | tail"}, {"command": "true && ls &>/dev/null"},
+                   {"command": "echo 'a & b'"}, {"command": "python3 - <<'EOF'\nm = (a > 1) & (b < 2)\nx &= 3\nEOF"},
+                   {"command": "cat <&0"}, {"command": "echo $(( 5 & 3 ))"}, {"command": "echo a\\&b"},
+                   {"command": "tmux ls"}, {"command": 'git commit -m "feat: x\n\nat least one test added"'},
+                   {"command": "python3 -c \"\nbatch = [1]\nprint(batch)\""}):
+            with self.subTest(ti=ti):
+                self.assertIsNone(self.gate("Bash", ti))
+        Path(self.proj, "docs", "plans").mkdir()
+        Path(self.proj, "docs", "plans", "phase-1.md").write_text("# plan")
+        self.assertIsNone(self.gate("Bash", {"command": "node scripts/codegen.mjs &"}))
+
+    def test_record_lives_in_the_project_state_and_refuses_links(self):
+        # 공용 /tmp 의 예측 가능한 경로는 다른 사용자가 미리 만들어 둘 수 있었다(정리 루프가 남의 파일을 지움, push 전 리뷰 F4)
+        self.run_cmd(lambda: None, tid="toolu_loc")
+        state = Path(self.proj, ".claude", "state")
+        self.assertTrue((state / "gate-pre").is_dir())
+        self.assertEqual(_git(self.proj, "status", "--porcelain").stdout, "")   # 기록은 사용자 저장소를 더럽히지 않는다
+        victim = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(victim, ignore_errors=True))
+        old = victim / "keep.json"
+        old.write_text("{}")
+        os.utime(old, (1, 1))
+        shutil.rmtree(state / "gate-pre")
+        (state / "gate-pre").symlink_to(victim)
+        _, post = self.run_cmd(lambda: Path(self.proj, "src", "gen.ts").write_text(self.BIG), tid="toolu_link")
+        self.assertTrue(old.exists())
+        self.assertEqual(sorted(x.name for x in victim.iterdir()), ["keep.json"])
+
+    def test_restoring_head_content_is_not_new_code(self):
+        # 잘려 있던 추적 파일을 HEAD 로 되살리면 많은 줄이 다시 들어온다 — 이미 커밋된 내용이라 새 코드가 아니다(pull·브랜치 전환도 같다)
+        big = Path(self.proj, "src", "big.ts")
+        big.write_text(self.BIG)
+        _git(self.proj, "add", "-A")
+        _git(self.proj, "commit", "-qm", "big")
+        big.write_text("\n".join(self.BIG.split("\n")[:3]))
+        _, post = self.run_cmd(lambda: big.write_text(self.BIG), tid="toolu_r1")
+        self.assertIsNone(post)
+        # 지워졌던 추적 파일을 되살리는 것도 같다(실행 전엔 없던 파일 = 새 파일 판정을 받지 않는다)
+        big.unlink()
+        _, post = self.run_cmd(lambda: big.write_text(self.BIG), tid="toolu_r2")
+        self.assertIsNone(post)
+
+    def test_revert_to_head_passes_in_a_subfolder_project(self):
+        # `git -C <프로젝트> show HEAD:<경로>` 는 저장소 루트 기준이라 하위 폴더 프로젝트에선 늘 실패했다(2차 리뷰 F1) — `HEAD:./`
+        sub = Path(self.proj, "app")
+        (sub / "src").mkdir(parents=True)
+        (sub / ".harness.json").write_text('{"role": "project"}')
+        (sub / "src" / "a.ts").write_text("x\n")
+        _git(self.proj, "add", "-A")
+        _git(self.proj, "commit", "-qm", "app")
+        (sub / "src" / "a.ts").write_text(self.BIG)
+        def hook(event):
+            return run_hook("gate-engine.py", {"tool_name": "Bash", "tool_input": {"command": "x"}, "cwd": str(sub),
+                                               "hook_event_name": event, "tool_use_id": "toolu_sub"},
+                            env={"CLAUDE_PROJECT_DIR": str(sub)}, cwd=str(sub))
+        hook("PreToolUse")
+        (sub / "src" / "a.ts").write_text("x\n")                  # 안내대로 HEAD 로 되돌린 명령
+        self.assertIsNone(hook("PostToolUse"))
+
+    def test_no_pre_record_means_no_judgment(self):
+        Path(self.proj, "src", "gen.ts").write_text(self.BIG)
+        post = self.hook("gate-engine.py", {"tool_name": "Bash", "tool_input": {"command": "x"},
+                                            "hook_event_name": "PostToolUse", "tool_use_id": "toolu_none"})
+        self.assertIsNone(post)
 
 
 class BannedPackageFormsTest(_RepoCase):

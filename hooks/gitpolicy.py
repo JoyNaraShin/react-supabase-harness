@@ -259,7 +259,7 @@ def verify_failed(root: str, git: str = "git"):
         return None
     try:
         head = subprocess.run([git, "-C", root, "rev-parse", "-q", "--verify", "HEAD"], capture_output=True,
-                              text=True, timeout=3, env=dict(os.environ, HARNESS_GIT_WRAPPED="1")).stdout.strip()
+                              text=True, timeout=3).stdout.strip()
     except Exception:
         return None
     if head and last.get("head") == head:
