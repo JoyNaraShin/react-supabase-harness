@@ -523,6 +523,58 @@ class DelegationTest(unittest.TestCase):
                 with self.subTest(agent=agent, ti=json.dumps(ti)[:70]):
                     self.assertIsNone(self.sub(tool, ti, agent=agent, proj=p))
 
+    def sub_cmd(self, proj, write, tid, event="PostToolUse", agent_id="a1", agent="general-purpose"):
+        # 실행 전 → 실제로 쓰고 → 실행 뒤. 명령 글자("python3 gen.py")에는 쓰기 대상이 없다
+        base = {"tool_name": "Bash", "tool_input": {"command": "python3 gen.py"}, "agent_type": agent,
+                "cwd": str(proj), "tool_use_id": tid}
+        if agent_id:
+            base["agent_id"] = agent_id
+        mark_harness(proj)
+        env = {"CLAUDE_PROJECT_DIR": str(proj)}
+        pre = run_hook("block-impl-delegation.py", dict(base, hook_event_name="PreToolUse"), env=env)
+        write()
+        return pre, run_hook("block-impl-delegation.py", dict(base, hook_event_name=event), env=env)
+
+    def test_subagent_code_writes_are_caught_after_the_command(self):
+        # 정적 판정이 못 읽는 쓰기(인터프리터·스크립트·생성기·지우기)도 실행 전후 비교로 그 에이전트에게 돌아간다
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(os.path.realpath(d))
+            (p / "src").mkdir()
+            (p / "src" / "old.ts").write_text("x")
+            for i, (write, event) in enumerate([(lambda: (p / "src" / "gen.ts").write_text("y"), "PostToolUse"),
+                                                (lambda: (p / "src" / "old.ts").write_text("changed"), "PostToolUse"),
+                                                (lambda: (p / "package.json").write_text("{}"), "PostToolUseFailure"),
+                                                (lambda: (p / "src" / "gen.ts").unlink(), "PostToolUse")]):
+                with self.subTest(i=i):
+                    pre, post = self.sub_cmd(p, write, f"toolu_d{i}", event=event)
+                    self.assertIsNone(pre)
+                    text = post["reason"] if event == "PostToolUse" else post["hookSpecificOutput"]["additionalContext"]
+                    self.assertIn("다음 행동", text)
+                    self.assertIn("되돌리지도 마라", text)      # 되돌림 수단은 실행 전 판정이 막고, 남의 편집일 수 있다
+
+    def test_stale_records_are_swept(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(os.path.realpath(d))
+            self.sub_cmd(p, lambda: None, "toolu_s1")
+            stale = p / ".claude" / "state" / "gate-pre" / "deleg-old.json"
+            stale.write_text("{}")
+            os.utime(stale, (1, 1))
+            self.sub_cmd(p, lambda: None, "toolu_s2")
+            self.assertFalse(stale.exists())
+
+    def test_after_check_leaves_non_code_main_session_and_writers_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(os.path.realpath(d))
+            (p / "src").mkdir()
+            _, post = self.sub_cmd(p, lambda: (p / "notes.md").write_text("x"), "toolu_n1")
+            self.assertIsNone(post)
+            _, post = self.sub_cmd(p, lambda: (p / "src" / "m.ts").write_text("x"), "toolu_n2", agent_id=None)
+            self.assertIsNone(post)
+            (p / ".claude" / "gates").mkdir(parents=True)
+            (p / ".claude" / "gates" / "rules.jsonc").write_text('{"delegation": {"writers": ["impl"]}}')
+            _, post = self.sub_cmd(p, lambda: (p / "src" / "w.ts").write_text("x"), "toolu_n3", agent="impl")
+            self.assertIsNone(post)
+
     def test_main_session_writes_are_not_judged(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)

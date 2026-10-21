@@ -114,6 +114,8 @@ MUTANTS = [
     ("shell-quotes-kept", "shellparse.py", "neutralize_quotes", "cmd"),
     ("shell-targets-none", "shellparse.py", "write_targets", "[]"),
     ("delegation-git-never", "block-impl-delegation.py", "git_tree_write", "False"),
+    ("delegation-record-never", "block-impl-delegation.py", "record_zone", "None"),
+    ("delegation-changes-none", "block-impl-delegation.py", "zone_changes", "None"),
     # 0.40.0 S3 — 런처·git 전역 옵션·cd 추적·source 판정이 shellparse 로 옮겨 왔다
     ("strip-launchers-noop", "shellparse.py", "strip_launchers", "toks"),
     ("git-sub-none", "shellparse.py", "git_sub", "(-1, [])"),

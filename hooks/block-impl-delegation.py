@@ -24,9 +24,13 @@
   보호하므로, 위임 예외는 사용자가 직접 추가한다.
 - worktree 격리 에이전트는 프로젝트 루트 밖에서 일하므로 판정 대상이 아니다(머지는 리뷰를 거친다).
 
-한계(정직하게): 인터프리터 한 줄 실행이나 스크립트 파일을 거친 쓰기는 Bash 문자열에서
-대상이 드러나지 않아 놓칠 수 있다. 협조형 가드이며, 그런 쓰기(포매터·생성기·설치 포함)는
-subagent-audit 의 사후 diff(SubagentStop)가 결과로 잡아 보고시킨다.
+Bash 는 두 번 본다(0.45.0):
+- 실행 전 — 명령 글자에서 읽은 쓰기 대상(위). 이유를 먼저 알려 주는 안내층이다.
+- 실행 뒤 — 실행 전에 코드 영역 파일의 stat 을 남기고(PreToolUse), 끝난 뒤(PostToolUse·PostToolUseFailure, 같은
+  `tool_use_id`) 다시 재서 이 명령 동안 생기거나 바뀌거나 지워진 코드 영역 파일을 그 서브에이전트에게 돌려준다.
+  인터프리터·스크립트·생성기·포매터 어떤 표기든 같다. 되돌리라고 하지 않는다 — 같은 순간 메인 세션·사용자 편집이 섞일
+  수 있고, 되돌림 수단(git checkout·rm·Edit)은 실행 전 판정이 막는다. 멈추고 보고하게 한다(subagent-audit 과 같은 규칙).
+- 백그라운드 명령이 나중에 쓴 것은 여기서 못 본다. subagent-audit 의 에이전트 전체 사후 diff(SubagentStop)가 받친다.
 """
 import fnmatch
 import json
@@ -70,14 +74,24 @@ def load_policy(root: Path) -> dict:
     return policy
 
 
-def _strip_jsonc():
-    """gate-engine 의 문자열 인지 JSONC 스캐너를 재사용한다(정규식으로 벗기면 glob 이 지워진다)."""
-    try:
+_GE = []
+
+
+def _ge():
+    """gate-engine 모듈 — JSONC 스캐너와 실행 전후 대조 도구(기록 위치·프로젝트 파일 목록)를 함께 쓴다."""
+    if not _GE:
         import importlib.util
         spec = importlib.util.spec_from_file_location("gate_engine", Path(__file__).with_name("gate-engine.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod.strip_jsonc
+        _GE.append(mod)
+    return _GE[0]
+
+
+def _strip_jsonc():
+    """gate-engine 의 문자열 인지 JSONC 스캐너를 재사용한다(정규식으로 벗기면 glob 이 지워진다)."""
+    try:
+        return _ge().strip_jsonc
     except Exception:
         return lambda t: t
 
@@ -127,6 +141,65 @@ def git_tree_write(seg: str, cwd: str, root: Path) -> bool:
     return sub in GIT_TREE_SUBS
 
 
+def _record(data: dict, root: Path):
+    tid = re.sub(r"[^A-Za-z0-9_-]", "_", str(data.get("tool_use_id") or ""))[:120]
+    d = _ge()._pre_dir(root) if tid else None
+    return os.path.join(d, "deleg-" + tid + ".json") if d else None
+
+
+def _zone_stats(root: Path, zone: list) -> dict:
+    out = {}
+    for f in _ge()._project_files(root):
+        rel = in_code_zone(f, root, zone)
+        if rel:
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            out[rel] = [st.st_mtime_ns, st.st_size]
+    return out
+
+
+def record_zone(data: dict, root: Path, zone: list) -> None:
+    """실행 전 — 코드 영역 파일의 stat. 실패하면 기록이 없을 뿐이다(실행 뒤 판정이 빠지고 SubagentStop diff 가 남는다)."""
+    f = _record(data, root)
+    if not f:
+        return
+    import time
+    d = os.path.dirname(f)
+    for old in os.listdir(d):    # 다른 훅·권한 거부로 실행되지 않아 실행 뒤 짝을 못 만난 기록 — 하루 지나면 지운다
+        x = os.path.join(d, old)
+        try:
+            if old.startswith("deleg-") and not os.path.islink(x) and time.time() - os.path.getmtime(x) > 86400:
+                os.remove(x)
+        except OSError:
+            pass
+    with open(f, "w", encoding="utf-8") as fh:
+        json.dump(_zone_stats(root, zone), fh)
+
+
+def zone_changes(data: dict, root: Path, zone: list):
+    """실행 뒤 — 이 명령 동안 생기거나 바뀌거나 지워진 코드 영역 파일. 실행 전 기록이 없으면 None."""
+    f = _record(data, root)
+    try:
+        with open(f, encoding="utf-8") as fh:
+            pre = json.load(fh)
+        os.remove(f)
+    except Exception:
+        return None
+    now = _zone_stats(root, zone)
+    return sorted(p for p in set(pre) | set(now) if pre.get(p) != now.get(p))
+
+
+def post_message(agent: str, changed: list) -> str:
+    listing = ", ".join(f"`{p}`" for p in changed[:10]) + (f" 외 {len(changed) - 10}개" if len(changed) > 10 else "")
+    return (f"서브에이전트(`{agent}`)의 방금 명령 동안 코드 영역 파일이 바뀌었다 — {listing}. "
+            "RULES §7: 구현은 메인 세션이 한다. (명령 글자와 무관하게 실행 전후 파일을 비교했다.)\n"
+            "다음 행동: 코드 영역을 바꾸는 명령을 더 실행하지 마라. 되돌리지도 마라 — 같은 순간 메인 세션·사용자가 편집했을 "
+            "수 있고, 되돌릴지는 메인 세션이 사용자와 판단한다(subagent-audit 과 같은 규칙). 최종 보고에 이 파일 목록과 "
+            "그것을 바꾼 명령을 적고, 의도한 변경안은 diff 나 코드 블록으로 담아라.")
+
+
 def deny(reason: str) -> None:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -162,6 +235,15 @@ def main() -> None:
         sys.exit(0)
 
     tool, ti = data.get("tool_name"), data.get("tool_input") or {}
+    event = data.get("hook_event_name")
+    if event in ("PostToolUse", "PostToolUseFailure"):
+        changed = zone_changes(data, root, policy["codeZone"]) if tool == "Bash" else None
+        if changed:
+            msg = post_message(agent, changed)
+            out = ({"hookSpecificOutput": {"hookEventName": event, "additionalContext": msg}}
+                   if event == "PostToolUseFailure" else {"decision": "block", "reason": msg})
+            print(json.dumps(out, ensure_ascii=False))
+        sys.exit(0)
     if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         hit = in_code_zone(ti.get("file_path") or ti.get("notebook_path") or "", root, policy["codeZone"])
         if hit:
@@ -182,6 +264,10 @@ def main() -> None:
                 hit = in_code_zone(t if os.path.isabs(t) else os.path.join(here, t), root, policy["codeZone"])
                 if hit:
                     deny(message(agent, hit))
+        try:
+            record_zone(data, root, policy["codeZone"])   # 막지 않은 명령만 — 실행 뒤 결과로 다시 본다
+        except Exception:
+            pass
     sys.exit(0)
 
 
