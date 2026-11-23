@@ -28,6 +28,11 @@ def dangerous_root(t: str) -> bool:
     (`"$DIR"/`, `$PWD`, `$(pwd)`).
     """
     t = t.strip("'\"")
+    # Repeated slashes in a home-prefixed path must not hide a direct child.
+    for prefix in ("~/", "$HOME/", "${HOME}/"):
+        if t.startswith(prefix):
+            t = prefix + t[len(prefix):].lstrip("/")
+            break
     if re.fullmatch(r"(\$\{?\w+\}?|\$\(\s*pwd\s*\)|`pwd`)[/*]*", t):
         return True
     # 디렉터리 스택 틸드: `~+` = cwd, `~-`·`~N` = 이전·스택 위치(알 수 없음) — 생성형 차분 테스트가 찾음

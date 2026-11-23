@@ -216,7 +216,11 @@ def _absolutes(c: str) -> list:
     (그 판정은 dangerous_root·rm_candidates 몫). 끝의 `/` 는 rm 처럼 링크를 따라간다."""
     home = CTX["home"]
     c = re.sub(r"^\$(?:HOME|\{HOME\})(?=/|$)", lambda m: home or m.group(0), c)
-    if "$" in c or "`" in c:
+    # A standalone '$' is a literal filename character, not a variable expansion.
+    # Keep checking literal home children such as ~//..$.
+    if (shellparse.VAR_ANY.search(c)
+            or any(mark in c for mark in ("$(", "$[", "${", "$'", '$"'))
+            or "`" in c):
         return []
     if c.startswith("~"):
         e = os.path.expanduser(c) if not (c == "~" or c.startswith("~/")) else (home + c[1:] if home else c)
