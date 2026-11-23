@@ -15,7 +15,8 @@ permissions:
 
 jobs:
   hooks:
-    runs-on: ubuntu-latest
+    # Python 3.9 is unavailable on ubuntu-26.04; use a pinned compatible image.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
