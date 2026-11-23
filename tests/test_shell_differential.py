@@ -293,6 +293,21 @@ class ShellDifferentialTest(unittest.TestCase):
         self.assertGreater(checked, 50)
         self.assertEqual(misses[:8], [], f"{label} 중 가드가 통과시켰는데 실제 대상이 위험한 것 {len(misses)}개")
 
+    def test_literal_dollar_and_repeated_home_slashes_cannot_hide_deletion(self):
+        # Regression for rotating seed 451776994731: rm -rf ~//..$
+        # A trailing dollar sign is literal in bash, and // still selects a HOME child.
+        for path in ("~//..$", "~/..$", "~///cache$", "$HOME//..$", "${HOME}///cache$"):
+            with self.subTest(path=path):
+                cmd = "rm -rf " + path
+                targets = real_args(cmd, self.cwd, self.home)
+                self.assertTrue(targets, "bash did not pass an rm target")
+                self.assertTrue(all(is_dangerous(p, self.cwd, self.home) for p in targets))
+                self.assertTrue(self.bdg.dangerous_root(path), "home-level path not recognized")
+                self.assertIsNotNone(self.bdg.scan(cmd), "dangerous deletion was not blocked")
+
+        # Preserve ordinary cleanup of a nested folder below HOME.
+        self.assertIsNone(self.bdg.scan("rm -rf ~/cache$/nested"))
+
     def test_generated_shell_syntax_never_hides_a_dangerous_target(self):
         self._fuzz(gen_grammar, "문법 단위 생성 명령")
 
